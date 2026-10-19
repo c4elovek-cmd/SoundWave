@@ -1,0 +1,251 @@
+import { useEffect, useState } from "react";
+import {
+  CaretLeft,
+  CaretRight,
+  Gear,
+  Queue,
+  X,
+  SignIn,
+  Trash,
+} from "@phosphor-icons/react";
+import Sidebar from "./components/Sidebar/Sidebar";
+import Player from "./components/Player/Player";
+import HomePage from "./pages/HomePage";
+import SearchPage from "./pages/SearchPage";
+import LibraryPage from "./pages/LibraryPage";
+import AuthPage from "./pages/AuthPage";
+import ManualAuthPage from "./pages/ManualAuthPage";
+import { useAppStore } from "./stores/appStore";
+import { usePlayerStore } from "./stores/playerStore";
+import { setAuthCookies } from "./lib/soundcloud-api";
+import "./components/Layout/Layout.css";
+
+export default function App() {
+  const {
+    view,
+    setView,
+    isLoggedIn,
+    setLoggedIn,
+    currentUser,
+    theme,
+    setTheme,
+    queueVisible,
+    toggleQueue,
+  } = useAppStore();
+  const { queue, queueIndex, play, currentTrack, isPlaying, togglePlay, next, prev, removeFromQueue } =
+    usePlayerStore();
+  const [isAuthRoute, setIsAuthRoute] = useState<"none" | "real" | "manual">("none");
+  const [loginMenuOpen, setLoginMenuOpen] = useState(false);
+
+  // Определяем, какое окно открыто
+  useEffect(() => {
+    const hash = window.location.hash;
+    if (hash.startsWith("#/auth/manual")) setIsAuthRoute("manual");
+    else if (hash.startsWith("#/auth")) setIsAuthRoute("real");
+  }, []);
+
+  // Загрузка конфига при старте
+  useEffect(() => {
+    if (!window.electronAPI) return;
+
+    window.electronAPI.getConfig().then((cfg) => {
+      // Восстанавливаем тему
+      const t = (cfg.theme as typeof theme) || "dark";
+      document.documentElement.setAttribute("data-theme", t);
+      useAppStore.setState({ theme: t });
+
+      // Громкость
+      usePlayerStore.getState().setVolume(cfg.volume ?? 0.8);
+    });
+
+    // Восстанавливаем сохранённую сессию
+    window.electronAPI.restoreSession?.().then((res) => {
+      if (res?.loggedIn && res.cookies) {
+        setAuthCookies(res.cookies);
+        setLoggedIn(true);
+        import("./lib/soundcloud-api")
+          .then(({ scApi }) => scApi.getMe())
+          .then((me) => setLoggedIn(true, me))
+          .catch(() => {});
+      }
+    });
+
+    // Подписки на события
+    window.electronAPI.onAuthSuccess(async (cookies) => {
+      if (cookies === "open-real-login") {
+        // Пользователь нажал «Открыть SoundCloud» в окне авторизации —
+        // сообщаем main-процессу открыть настоящий soundcloud.com/login.
+        // Реализация в main.ts: см. TODO в createAuthWindow.
+        return;
+      }
+      setAuthCookies(cookies);
+      // Загружаем профиль
+      try {
+        const { scApi } = await import("./lib/soundcloud-api");
+        const me = await scApi.getMe();
+        setLoggedIn(true, me);
+      } catch {
+        setLoggedIn(true);
+      }
+    });
+
+    window.electronAPI.onLoggedOut(() => {
+      setLoggedIn(false);
+    });
+
+    window.electronAPI.onTrayPlayPause(() => togglePlay());
+    window.electronAPI.onTrayNext(() => next());
+    window.electronAPI.onTrayPrev(() => prev());
+    window.electronAPI.onMediaPlayPause(() => togglePlay());
+    window.electronAPI.onMediaNext(() => next());
+    window.electronAPI.onMediaPrev(() => prev());
+
+    return () => {
+      window.electronAPI?.removeAllListeners("auth-success");
+      window.electronAPI?.removeAllListeners("logged-out");
+    };
+  }, []);
+
+  // Если это окно авторизации — рендерим только его
+  if (isAuthRoute === "manual") {
+    return <ManualAuthPage />;
+  }
+  if (isAuthRoute === "real") {
+    return <AuthPage />;
+  }
+
+  const renderView = () => {
+    switch (view) {
+      case "home":
+        return <HomePage />;
+      case "search":
+        return <SearchPage />;
+      case "likes":
+        return <LibraryPage mode="likes" />;
+      case "uploads":
+        return <LibraryPage mode="uploads" />;
+      case "library":
+        return <LibraryPage mode="likes" />;
+      default:
+        return <HomePage />;
+    }
+  };
+
+  return (
+    <div className="app-shell">
+      <div className="app-body">
+        <Sidebar />
+
+        <div className="app-main">
+          <div className="top-bar">
+            <div className="nav-arrows">
+              <button className="nav-arrow" disabled title="Назад">
+                <CaretLeft size={18} weight="bold" />
+              </button>
+              <button className="nav-arrow" disabled title="Вперёд">
+                <CaretRight size={18} weight="bold" />
+              </button>
+            </div>
+
+            <div className="top-bar-spacer" />
+
+            <div className="top-bar-actions">
+              <button className="icon-btn" onClick={toggleQueue} title="Очередь">
+                <Queue size={19} />
+              </button>
+
+              {isLoggedIn ? (
+                <div className="user-chip">
+                  <div className="user-avatar">
+                    {currentUser?.avatar_url ? (
+                      <img src={currentUser.avatar_url} alt="" />
+                    ) : (
+                      (currentUser?.username?.[0] ?? "S").toUpperCase()
+                    )}
+                  </div>
+                  <span className="user-name">{currentUser?.username ?? "Аккаунт"}</span>
+                </div>
+              ) : (
+                <div style={{ position: "relative" }}>
+                  <button
+                    className="btn-accent"
+                    onClick={() => setLoginMenuOpen((v) => !v)}
+                  >
+                    Войти
+                  </button>
+                  {loginMenuOpen && (
+                    <div className="login-menu">
+                      <button
+                        className="login-menu-item"
+                        onClick={() => {
+                          setLoginMenuOpen(false);
+                          window.electronAPI?.openAuthWindow();
+                        }}
+                      >
+                        Вход через окно SoundCloud
+                      </button>
+                      <button
+                        className="login-menu-item"
+                        onClick={() => {
+                          setLoginMenuOpen(false);
+                          window.electronAPI?.openManualLogin();
+                        }}
+                      >
+                        Войти вручную (cookies из браузера)
+                      </button>
+                    </div>
+                  )}
+                </div>
+              )}
+            </div>
+          </div>
+
+          <div className="content-scroll">{renderView()}</div>
+        </div>
+
+        {queueVisible && (
+          <div className="queue-panel">
+            <div className="queue-header">
+              <span>Очередь</span>
+              <button className="icon-btn" onClick={toggleQueue}>
+                <X size={16} />
+              </button>
+            </div>
+            <div className="queue-list">
+              {queue.length === 0 && (
+                <div style={{ padding: 16, fontSize: 13, color: "var(--text-secondary)" }}>
+                  Очередь пуста
+                </div>
+              )}
+              {queue.map((t, i) => (
+                <div
+                  key={`${t.id}-${i}`}
+                  className={`track-row ${currentTrack?.id === t.id ? "playing" : ""}`}
+                  style={{ gridTemplateColumns: "1fr 28px", height: 46 }}
+                >
+                  <div style={{ minWidth: 0, display: "flex", flexDirection: "column", gap: 2 }}>
+                    <span className="track-title" style={{ fontSize: 13 }}>
+                      {t.title}
+                    </span>
+                    <span className="track-artist" style={{ fontSize: 11 }}>
+                      {t.user.username}
+                    </span>
+                  </div>
+                  <button
+                    className="icon-btn"
+                    onClick={() => removeFromQueue(i)}
+                    title="Убрать"
+                  >
+                    <X size={13} />
+                  </button>
+                </div>
+              ))}
+            </div>
+          </div>
+        )}
+      </div>
+
+      <Player />
+    </div>
+  );
+}

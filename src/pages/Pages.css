@@ -1,0 +1,567 @@
+/* ===== Страницы ===== */
+.page {
+  padding-top: 8px;
+  animation: fadeIn var(--transition-base);
+}
+
+.page-header {
+  margin-bottom: 28px;
+}
+
+.page-title {
+  font-size: 28px;
+  font-weight: 700;
+  letter-spacing: -0.5px;
+  margin-bottom: 6px;
+}
+
+.page-subtitle {
+  font-size: 13px;
+  color: var(--text-secondary);
+}
+
+.section {
+  margin-bottom: 36px;
+}
+
+.section-header {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  margin-bottom: 14px;
+}
+
+.section-title {
+  font-size: 20px;
+  font-weight: 700;
+  letter-spacing: -0.3px;
+}
+
+.section-more {
+  font-size: 12px;
+  font-weight: 700;
+  color: var(--text-secondary);
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+}
+
+.section-more:hover {
+  color: var(--text-primary);
+  text-decoration: underline;
+}
+
+/* Приветственный баннер на главной */
+.hero {
+  border-radius: var(--radius-lg);
+  padding: 32px;
+  margin-bottom: 28px;
+  background:
+    radial-gradient(120% 140% at 100% 0%, var(--accent-subtle), transparent 60%),
+    linear-gradient(135deg, var(--bg-elevated), var(--bg-surface));
+  border: 1px solid var(--border-subtle);
+  position: relative;
+  overflow: hidden;
+}
+
+.hero::after {
+  content: "";
+  position: absolute;
+  right: -60px;
+  top: -60px;
+  width: 240px;
+  height: 240px;
+  border-radius: 50%;
+  background: var(--accent);
+  opacity: 0.12;
+  filter: blur(40px);
+}
+
+.hero-title {
+  font-size: 32px;
+  font-weight: 800;
+  letter-spacing: -1px;
+  margin-bottom: 8px;
+}
+
+.hero-sub {
+  font-size: 14px;
+  color: var(--text-secondary);
+  margin-bottom: 20px;
+  max-width: 520px;
+}
+
+.hero-actions {
+  display: flex;
+  gap: 10px;
+}
+
+.btn-ghost {
+  padding: 9px 18px;
+  border-radius: var(--radius-full);
+  border: 1px solid var(--border);
+  font-size: 13px;
+  font-weight: 700;
+  color: var(--text-primary);
+  transition: border-color var(--transition-fast), background var(--transition-fast);
+}
+
+.btn-ghost:hover {
+  border-color: var(--text-primary);
+  background: var(--bg-hover);
+}
+
+/* Поиск */
+.search-input-wrap {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  background: var(--bg-input);
+  border: 1px solid transparent;
+  border-radius: var(--radius-full);
+  padding: 10px 18px;
+  margin-bottom: 24px;
+  max-width: 520px;
+  transition: border-color var(--transition-fast);
+}
+
+.search-input-wrap:focus-within {
+  border-color: var(--text-primary);
+}
+
+.search-input {
+  flex: 1;
+  font-size: 14px;
+}
+
+.search-input::placeholder {
+  color: var(--text-disabled);
+}
+
+.search-tabs {
+  display: flex;
+  gap: 8px;
+  margin-bottom: 20px;
+}
+
+.search-tab {
+  padding: 7px 16px;
+  border-radius: var(--radius-full);
+  background: var(--bg-elevated);
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--text-secondary);
+  transition: background var(--transition-fast), color var(--transition-fast);
+}
+
+.search-tab:hover {
+  background: var(--bg-hover);
+  color: var(--text-primary);
+}
+
+.search-tab.active {
+  background: var(--text-primary);
+  color: var(--bg-base);
+}
+
+/* Пустое состояние */
+.empty-state {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  padding: 64px 24px;
+  gap: 12px;
+  color: var(--text-secondary);
+  text-align: center;
+}
+
+.empty-icon {
+  width: 72px;
+  height: 72px;
+  border-radius: 50%;
+  background: var(--bg-elevated);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  color: var(--text-disabled);
+  margin-bottom: 8px;
+}
+
+.empty-title {
+  font-size: 17px;
+  font-weight: 700;
+  color: var(--text-primary);
+}
+
+.empty-text {
+  font-size: 13px;
+  max-width: 380px;
+}
+
+/* Заголовок списка треков */
+.track-list-header {
+  display: grid;
+  grid-template-columns: 32px 1fr 120px 160px 60px 40px;
+  gap: 14px;
+  padding: 0 12px 8px;
+  border-bottom: 1px solid var(--border-subtle);
+  margin-bottom: 8px;
+  font-size: 11px;
+  font-weight: 700;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  color: var(--text-disabled);
+}
+
+.track-list-header .right {
+  text-align: right;
+}
+
+/* Страница логина */
+.auth-page {
+  width: 100%;
+  height: 100%;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background:
+    radial-gradient(80% 60% at 50% 0%, var(--accent-subtle), transparent 70%),
+    var(--bg-base);
+  padding: 24px;
+}
+
+.auth-card {
+  width: 100%;
+  max-width: 380px;
+  text-align: center;
+}
+
+.auth-logo {
+  width: 64px;
+  height: 64px;
+  border-radius: 18px;
+  background: var(--accent);
+  color: #fff;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 34px;
+  font-weight: 800;
+  margin: 0 auto 20px;
+  box-shadow: 0 8px 32px var(--accent-subtle);
+}
+
+.auth-title {
+  font-size: 26px;
+  font-weight: 800;
+  letter-spacing: -0.6px;
+  margin-bottom: 8px;
+}
+
+.auth-text {
+  font-size: 13px;
+  color: var(--text-secondary);
+  margin-bottom: 28px;
+  line-height: 1.6;
+}
+
+.auth-btn {
+  width: 100%;
+  padding: 13px;
+  border-radius: var(--radius-full);
+  background: var(--accent);
+  color: #fff;
+  font-weight: 700;
+  font-size: 14px;
+  transition: background var(--transition-fast), transform var(--transition-fast);
+}
+
+.auth-btn:hover {
+  background: var(--accent-hover);
+  transform: scale(1.01);
+}
+
+.auth-note {
+  font-size: 11px;
+  color: var(--text-disabled);
+  margin-top: 16px;
+  line-height: 1.6;
+}
+
+/* Страница плейлиста / артиста */
+.playlist-hero {
+  display: flex;
+  align-items: flex-end;
+  gap: 24px;
+  padding: 24px 0 32px;
+}
+
+.playlist-hero-art {
+  width: 200px;
+  height: 200px;
+  min-width: 200px;
+  border-radius: var(--radius-lg);
+  overflow: hidden;
+  background: var(--bg-elevated);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  color: var(--text-disabled);
+  box-shadow: var(--shadow-lg);
+}
+
+.playlist-hero-art.round {
+  border-radius: 50%;
+}
+
+.playlist-hero-art img {
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+}
+
+.playlist-hero-info {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  min-width: 0;
+}
+
+.playlist-type {
+  font-size: 11px;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.1em;
+  color: var(--text-secondary);
+}
+
+.playlist-name {
+  font-size: 44px;
+  font-weight: 800;
+  letter-spacing: -1.5px;
+  line-height: 1.1;
+  word-break: break-word;
+}
+
+.playlist-meta {
+  font-size: 13px;
+  color: var(--text-secondary);
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  flex-wrap: wrap;
+}
+
+.playlist-actions {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  margin: 16px 0 8px;
+}
+
+.big-play {
+  width: 52px;
+  height: 52px;
+  border-radius: 50%;
+  background: var(--accent);
+  color: #fff;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  transition: transform var(--transition-fast), background var(--transition-fast);
+  box-shadow: var(--shadow-md);
+}
+
+.big-play:hover {
+  transform: scale(1.06);
+  background: var(--accent-hover);
+}
+
+.link-btn {
+  background: none;
+  border: none;
+  color: var(--text-secondary);
+  font-size: 12px;
+  font-weight: 600;
+  text-decoration: underline;
+  cursor: pointer;
+  padding: 4px 8px;
+}
+
+.link-btn:hover {
+  color: var(--text-primary);
+}
+
+/* ===== Ручной вход ===== */
+.manual-card {
+  width: 100%;
+  max-width: 460px;
+  margin: auto;
+  background: var(--bg-surface);
+  border: 1px solid var(--border-subtle);
+  border-radius: var(--radius-lg);
+  padding: 24px;
+  box-shadow: var(--shadow-lg);
+}
+
+.manual-head {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  margin-bottom: 18px;
+}
+
+.manual-title {
+  font-size: 18px;
+  font-weight: 700;
+  letter-spacing: -0.3px;
+}
+
+.manual-sub {
+  font-size: 12px;
+  color: var(--text-secondary);
+  margin-top: 2px;
+}
+
+.manual-steps {
+  margin: 0 0 18px 18px;
+  padding: 0;
+  font-size: 12.5px;
+  line-height: 1.75;
+  color: var(--text-secondary);
+}
+
+.manual-steps li {
+  margin-bottom: 4px;
+}
+
+.manual-steps b {
+  color: var(--text-primary);
+  font-weight: 600;
+}
+
+.manual-steps a {
+  color: var(--accent);
+  text-decoration: none;
+  font-weight: 600;
+}
+
+.manual-steps a:hover {
+  text-decoration: underline;
+}
+
+.manual-steps code {
+  background: var(--bg-elevated);
+  padding: 1px 5px;
+  border-radius: var(--radius-sm);
+  font-size: 11px;
+  color: var(--text-primary);
+}
+
+.manual-field-wrap {
+  position: relative;
+  margin-bottom: 12px;
+}
+
+.manual-textarea {
+  width: 100%;
+  min-height: 130px;
+  resize: vertical;
+  background: var(--bg-input);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-md);
+  padding: 12px 12px 40px;
+  font-family: "Consolas", "SF Mono", monospace;
+  font-size: 11.5px;
+  line-height: 1.6;
+  color: var(--text-primary);
+  outline: none;
+  transition: border-color var(--transition-fast);
+  user-select: text;
+}
+
+.manual-textarea::placeholder {
+  color: var(--text-disabled);
+}
+
+.manual-textarea:focus {
+  border-color: var(--accent);
+}
+
+.manual-paste {
+  position: absolute;
+  right: 8px;
+  bottom: 8px;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 5px 10px;
+  border-radius: var(--radius-sm);
+  background: var(--bg-elevated);
+  font-size: 11px;
+  font-weight: 600;
+  color: var(--text-secondary);
+  transition: color var(--transition-fast), background var(--transition-fast);
+}
+
+.manual-paste:hover {
+  background: var(--bg-hover);
+  color: var(--text-primary);
+}
+
+.manual-status {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 12px;
+  padding: 9px 12px;
+  border-radius: var(--radius-md);
+  margin-bottom: 12px;
+  line-height: 1.5;
+}
+
+.manual-status.ok {
+  background: rgba(29, 185, 84, 0.12);
+  color: #4ade80;
+}
+
+.manual-status.error {
+  background: rgba(255, 85, 0, 0.12);
+  color: var(--accent);
+}
+
+.manual-alt {
+  text-align: center;
+  margin: 6px 0 14px;
+}
+
+/* Скелетоны загрузки */
+.skeleton {
+  background: linear-gradient(90deg, var(--bg-elevated) 25%, var(--bg-hover) 50%, var(--bg-elevated) 75%);
+  background-size: 200% 100%;
+  animation: shimmer 1.4s infinite;
+  border-radius: var(--radius-sm);
+}
+
+@keyframes shimmer {
+  0% { background-position: 200% 0; }
+  100% { background-position: -200% 0; }
+}
+
+.skeleton-row {
+  height: 54px;
+  margin-bottom: 6px;
+}
+
+.spinner {
+  width: 28px;
+  height: 28px;
+  border: 2px solid var(--bg-active);
+  border-top-color: var(--accent);
+  border-radius: 50%;
+  animation: spin 0.7s linear infinite;
+}
+
+@keyframes spin {
+  to { transform: rotate(360deg); }
+}
