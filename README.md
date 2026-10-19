@@ -3,6 +3,8 @@
 Десктопный клиент **SoundCloud** в стиле Spotify. Оранжевая тема, смена оформления, глобальные медиа-клавиши, системный трей.
 
 ![status](https://img.shields.io/badge/status-MVP-ff5500)
+![screenshot](docs/screenshot.png)
+
 ![stack](https://img.shields.io/badge/Electron%20%2B%20React%20%2B%20TS-ff5500)
 
 ## Что внутри
