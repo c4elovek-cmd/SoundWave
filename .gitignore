@@ -31,3 +31,4 @@ desktop.ini
 # Временные скриншоты
 *.png
 !docs/**/*.png
+!resources/*.png

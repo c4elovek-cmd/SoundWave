@@ -92,9 +92,75 @@ if (isExternalPage) {
     resolveStream: (trackId: number) => ipcRenderer.invoke("sc-resolve-stream", trackId),
     getClientId: () => ipcRenderer.invoke("get-client-id"),
 
+    // Тексты песен с Genius и внешние ссылки
+    getLyrics: (title: string, artist: string) =>
+      ipcRenderer.invoke("genius-lyrics", { title, artist }),
+    getSyncedLyrics: (title: string, artist: string, duration: number) =>
+      ipcRenderer.invoke("synced-lyrics", { title, artist, duration }),
+    openExternal: (url: string) => ipcRenderer.invoke("open-external", url),
+
+    // Локальный API для агентов: main присылает команду, renderer отвечает
+    onAgentRequest: (
+      callback: (request: { id: string; type: string; payload?: unknown }) => void
+    ) => {
+      const listener = (_event: unknown, request: { id: string; type: string; payload?: unknown }) =>
+        callback(request);
+      ipcRenderer.on("agent-request", listener);
+      return () => {
+        ipcRenderer.removeListener("agent-request", listener);
+      };
+    },
+    sendAgentResponse: (response: {
+      id: string;
+      ok: boolean;
+      data?: unknown;
+      error?: string;
+      code?: string;
+    }) => ipcRenderer.send("agent-response", response),
+
+    // Свои шрифты
+    listCustomFonts: () => ipcRenderer.invoke("fonts-list"),
+    importCustomFont: () => ipcRenderer.invoke("fonts-import"),
+    removeCustomFont: (id: string) => ipcRenderer.invoke("fonts-remove", id),
+
+    // Discord Rich Presence
+    discordStatus: () => ipcRenderer.invoke("discord-status"),
+    setDiscordConfig: (config: {
+      enabled?: boolean;
+      clientId?: string;
+      largeImage?: string;
+    }) => ipcRenderer.invoke("discord-config", config),
+    setDiscordPresence: (
+      presence: {
+        details?: string;
+        state?: string;
+        largeText?: string;
+        smallText?: string;
+        startTimestamp?: number;
+      } | null
+    ) => ipcRenderer.invoke("discord-presence", presence),
+
+    // Настройки локального API
+    agentApiConfig: (config?: {
+      enabled?: boolean;
+      port?: number;
+      regenerateToken?: boolean;
+    }) => ipcRenderer.invoke("agent-api-config", config),
+
+    // Папка с данными приложения
+    openUserData: () => ipcRenderer.invoke("open-user-data"),
+
     // Окно
     showWindow: () => ipcRenderer.invoke("show-window"),
     minimizeToTray: () => ipcRenderer.invoke("minimize-to-tray"),
+    setFullscreen: (value: boolean) => ipcRenderer.invoke("set-fullscreen", value),
+    onFullscreenChanged: (callback: (value: boolean) => void) => {
+      const listener = (_event: unknown, value: boolean) => callback(value);
+      ipcRenderer.on("app-fullscreen-changed", listener);
+      return () => {
+        ipcRenderer.removeListener("app-fullscreen-changed", listener);
+      };
+    },
 
     // События от main-процесса
     onAuthSuccess: (callback: (cookies: string) => void) => {

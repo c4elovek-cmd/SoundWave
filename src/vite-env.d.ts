@@ -7,6 +7,7 @@ declare global {
         theme: string;
         volume: number;
         loggedIn: boolean;
+        version?: string;
       }>;
       setTheme: (theme: string) => Promise<boolean>;
       setVolume: (volume: number) => Promise<boolean>;
@@ -29,8 +30,99 @@ declare global {
         trackId: number
       ) => Promise<{ url: string; protocol: string; duration: number }>;
       getClientId: () => Promise<string>;
+      getLyrics: (
+        title: string,
+        artist: string
+      ) => Promise<{
+        found: boolean;
+        title?: string;
+        artist?: string;
+        url?: string;
+        lyrics?: string;
+        error?: string;
+      }>;
+      openExternal: (url: string) => Promise<boolean>;
+      getSyncedLyrics: (
+        title: string,
+        artist: string,
+        duration: number
+      ) => Promise<{
+        found: boolean;
+        syncedLyrics?: string;
+        title?: string;
+        artist?: string;
+        duration?: number;
+        error?: string;
+      }>;
+      onAgentRequest: (
+        callback: (request: { id: string; type: string; payload?: unknown }) => void
+      ) => () => void;
+      sendAgentResponse: (response: {
+        id: string;
+        ok: boolean;
+        data?: unknown;
+        error?: string;
+        code?: string;
+      }) => void;
       showWindow: () => Promise<boolean>;
       minimizeToTray: () => Promise<boolean>;
+      setFullscreen: (value: boolean) => Promise<boolean>;
+      onFullscreenChanged: (callback: (value: boolean) => void) => () => void;
+      listCustomFonts: () => Promise<
+        {
+          id: string;
+          name: string;
+          family: string;
+          file: string;
+          mime: string;
+          dataUrl: string;
+        }[]
+      >;
+      importCustomFont: () => Promise<{
+        id: string;
+        name: string;
+        family: string;
+        file: string;
+        mime: string;
+        dataUrl: string;
+      } | null>;
+      removeCustomFont: (id: string) => Promise<boolean>;
+      discordStatus: () => Promise<{
+        enabled: boolean;
+        clientId: string;
+        largeImage: string;
+        connected: boolean;
+      }>;
+      setDiscordConfig: (config: {
+        enabled?: boolean;
+        clientId?: string;
+        largeImage?: string;
+      }) => Promise<{
+        enabled: boolean;
+        clientId: string;
+        largeImage: string;
+        connected: boolean;
+      }>;
+      setDiscordPresence: (
+        presence: {
+          details?: string;
+          state?: string;
+          largeText?: string;
+          smallText?: string;
+          startTimestamp?: number;
+        } | null
+      ) => Promise<boolean>;
+      agentApiConfig: (config?: {
+        enabled?: boolean;
+        port?: number;
+        regenerateToken?: boolean;
+      }) => Promise<{
+        enabled: boolean;
+        port: number;
+        token: string;
+        url: string | null;
+      }>;
+      openUserData: () => Promise<boolean>;
       onAuthSuccess: (callback: (cookies: string) => void) => void;
       onLoggedOut: (callback: () => void) => void;
       onTrayPlayPause: (callback: () => void) => void;

@@ -1,0 +1,286 @@
+/* ===== Караоке на весь экран ===== */
+
+.karaoke-fs {
+  position: fixed;
+  inset: 0;
+  z-index: 300;
+  display: flex;
+  flex-direction: column;
+  background: #07070a;
+  color: var(--text-primary);
+  overflow: hidden;
+  user-select: none;
+  animation: karaoke-fs-in 240ms ease;
+}
+
+@keyframes karaoke-fs-in {
+  from {
+    opacity: 0;
+    transform: scale(1.015);
+  }
+  to {
+    opacity: 1;
+    transform: scale(1);
+  }
+}
+
+.karaoke-fs-bg {
+  position: absolute;
+  inset: -8%;
+  background-size: cover;
+  background-position: center;
+  filter: blur(64px) saturate(1.6) brightness(1.05);
+  transform: scale(1.1);
+  opacity: 0.75;
+}
+
+.karaoke-fs-veil {
+  position: absolute;
+  inset: 0;
+  background:
+    radial-gradient(120% 75% at 50% 28%, rgba(0, 0, 0, 0.15), rgba(0, 0, 0, 0.8)),
+    linear-gradient(
+      180deg,
+      rgba(0, 0, 0, 0.72) 0%,
+      rgba(0, 0, 0, 0.4) 38%,
+      rgba(0, 0, 0, 0.88) 100%
+    );
+}
+
+/* --- Верхняя панель --- */
+
+.karaoke-fs-top {
+  position: relative;
+  z-index: 2;
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 20px;
+  padding: 24px 30px 0;
+}
+
+.karaoke-fs-track {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  min-width: 0;
+}
+
+.karaoke-fs-title {
+  font-size: 20px;
+  font-weight: 700;
+  letter-spacing: -0.3px;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.karaoke-fs-artist {
+  font-size: 14px;
+  color: var(--text-secondary);
+}
+
+.karaoke-fs-actions {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  flex: none;
+}
+
+.karaoke-fs-sync {
+  font-size: 12px;
+  color: var(--text-disabled);
+  padding: 4px 10px;
+  border: 1px solid var(--border-subtle);
+  border-radius: var(--radius-full);
+  white-space: nowrap;
+}
+
+.karaoke-fs-btn {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 40px;
+  height: 40px;
+  flex: none;
+  border: none;
+  border-radius: var(--radius-full);
+  background: rgba(255, 255, 255, 0.08);
+  color: var(--text-primary);
+  cursor: pointer;
+  transition:
+    background var(--transition-fast),
+    transform var(--transition-fast);
+}
+
+.karaoke-fs-btn:hover {
+  background: rgba(255, 255, 255, 0.18);
+}
+
+.karaoke-fs-btn:active {
+  transform: scale(0.94);
+}
+
+/* --- Сцена со строками --- */
+
+.karaoke-fs-stage {
+  position: relative;
+  z-index: 2;
+  flex: 1;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  min-height: 0;
+  padding: 0 6vw;
+}
+
+.karaoke-fs-lines {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 0.4em;
+  max-width: 1200px;
+  text-align: center;
+  line-height: 1.16;
+  font-weight: 800;
+  letter-spacing: -0.02em;
+}
+
+.karaoke-fs-line {
+  font-size: 0.46em;
+  font-weight: 700;
+  color: var(--text-secondary);
+  opacity: 0.3;
+  text-wrap: balance;
+  transition:
+    opacity 240ms ease,
+    color 240ms ease,
+    transform 240ms ease,
+    font-size 240ms ease;
+}
+
+.karaoke-fs-line.active {
+  font-size: 1em;
+  color: var(--text-primary);
+  opacity: 1;
+  transform: scale(1.02);
+  text-shadow: 0 6px 60px var(--accent-subtle);
+}
+
+.karaoke-fs-line.section {
+  font-size: 0.3em;
+  text-transform: uppercase;
+  letter-spacing: 0.16em;
+  opacity: 0.45;
+  color: var(--accent);
+}
+
+.karaoke-fs-status {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 14px;
+  max-width: 520px;
+  text-align: center;
+  font-size: 17px;
+  color: var(--text-secondary);
+}
+
+.karaoke-fs-spinner {
+  animation: karaoke-fs-spin 1s linear infinite;
+}
+
+@keyframes karaoke-fs-spin {
+  to {
+    transform: rotate(360deg);
+  }
+}
+
+.karaoke-fs-retry {
+  padding: 9px 18px;
+  border: none;
+  border-radius: var(--radius-full);
+  background: var(--accent);
+  color: var(--accent-text);
+  font-size: 14px;
+  font-weight: 600;
+  cursor: pointer;
+}
+
+/* --- Нижняя панель --- */
+
+.karaoke-fs-bottom {
+  position: relative;
+  z-index: 2;
+  display: flex;
+  align-items: center;
+  gap: 22px;
+  padding: 0 30px 26px;
+}
+
+.karaoke-fs-controls {
+  display: flex;
+  align-items: center;
+  gap: 14px;
+  flex: 1;
+  min-width: 0;
+}
+
+.karaoke-fs-progress {
+  flex: 1;
+  min-width: 0;
+  height: 6px;
+  padding: 8px 0;
+  background: transparent;
+  cursor: pointer;
+}
+
+.karaoke-fs-progress-track {
+  height: 6px;
+  border-radius: var(--radius-full);
+  background: rgba(255, 255, 255, 0.16);
+  overflow: hidden;
+}
+
+.karaoke-fs-progress-fill {
+  height: 100%;
+  width: 0;
+  border-radius: var(--radius-full);
+  background: var(--accent);
+}
+
+.karaoke-fs-time {
+  font-size: 13px;
+  color: var(--text-secondary);
+  font-variant-numeric: tabular-nums;
+  min-width: 44px;
+  text-align: right;
+}
+
+.karaoke-fs-size {
+  display: flex;
+  gap: 6px;
+  flex: none;
+}
+
+.karaoke-fs-size-btn {
+  width: 34px;
+  height: 34px;
+  border: none;
+  border-radius: var(--radius-sm);
+  background: rgba(255, 255, 255, 0.08);
+  color: var(--text-primary);
+  font-size: 13px;
+  font-weight: 700;
+  cursor: pointer;
+  transition: background var(--transition-fast);
+}
+
+.karaoke-fs-size-btn:hover:not(:disabled) {
+  background: rgba(255, 255, 255, 0.18);
+}
+
+.karaoke-fs-size-btn:disabled {
+  opacity: 0.35;
+  cursor: default;
+}

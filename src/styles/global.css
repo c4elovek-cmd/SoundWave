@@ -33,6 +33,31 @@ button {
   font-size: inherit;
 }
 
+/* Отключённые анимации */
+.no-animations *,
+.no-animations *::before,
+.no-animations *::after {
+  transition: none !important;
+  animation: none !important;
+}
+
+/* Компактная плотность интерфейса */
+.density-compact {
+  --player-height: 70px;
+}
+
+.density-compact .nav-item {
+  padding: 7px 12px;
+}
+
+.density-compact .track-row {
+  height: 52px;
+}
+
+.density-compact .content-scroll {
+  padding: 16px 24px;
+}
+
 input {
   font-family: inherit;
   border: none;

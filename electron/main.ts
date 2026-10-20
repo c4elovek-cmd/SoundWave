@@ -1,19 +1,42 @@
 import {
   app,
   BrowserWindow,
+  clipboard,
+  dialog,
   ipcMain,
   Tray,
   Menu,
   globalShortcut,
-  nativeImage,
   session,
+  shell,
 } from "electron";
 import path from "path";
+import { copyFileSync, existsSync, mkdirSync, readFileSync, unlinkSync } from "fs";
+import { randomBytes } from "crypto";
 import { fileURLToPath } from "url";
 import Store from "electron-store";
 import log from "electron-log";
+import { AgentApiHandle, startAgentApi } from "./agent-api";
+import { DiscordRpc } from "./discord-rpc";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
+
+if (process.platform === "win32") {
+  // Без AppUserModelID Windows иногда показывает пустую иконку в трее
+  // и не группирует окна приложения на панели задач.
+  app.setAppUserModelId("com.c4elovek.soundwave");
+}
+
+/** Путь к ресурсу: в dev — из папки проекта, в сборке — из resources. */
+function resourcePath(name: string): string {
+  return app.isPackaged
+    ? path.join(process.resourcesPath, name)
+    : path.join(__dirname, "..", "resources", name);
+}
+
+function appIconPath(): string {
+  return resourcePath(process.platform === "win32" ? "icon.ico" : "icon.png");
+}
 
 // Логирование
 log.transports.file.level = "info";
@@ -27,12 +50,73 @@ const store = new Store({
     windowBounds: { width: 1280, height: 800 },
     loggedIn: false,
     scCookies: null as string | null,
+    agentApiPort: 4783,
+    agentApiToken: "",
+    agentApiEnabled: true,
+    customFonts: [] as StoredFont[],
+    discordEnabled: false,
+    discordClientId: "",
+    discordLargeImage: "",
   },
 });
+
+/** Токен локального API создаётся один раз и хранится в конфиге. */
+function getAgentToken(): string {
+  let token = String(store.get("agentApiToken") ?? "");
+  if (!token) {
+    token = randomBytes(24).toString("hex");
+    store.set("agentApiToken", token);
+  }
+  return token;
+}
+
+/* ==================== Свои шрифты ==================== */
+
+const FONT_EXTENSIONS = ["ttf", "otf", "woff", "woff2"];
+const FONT_MIME: Record<string, string> = {
+  ttf: "font/ttf",
+  otf: "font/otf",
+  woff: "font/woff",
+  woff2: "font/woff2",
+};
+
+interface StoredFont {
+  id: string;
+  name: string;
+  family: string;
+  file: string;
+}
+
+function fontsDir(): string {
+  return path.join(app.getPath("userData"), "fonts");
+}
+
+function listStoredFonts(): StoredFont[] {
+  return (store.get("customFonts") as StoredFont[]) ?? [];
+}
+
+/** Готовая запись шрифта: метаданные + data-URL, который понимает FontFace. */
+function fontEntry(font: StoredFont) {
+  const ext = path.extname(font.file).slice(1).toLowerCase();
+  const mime = FONT_MIME[ext] ?? "application/octet-stream";
+
+  try {
+    const data = readFileSync(path.join(fontsDir(), font.file));
+    return {
+      ...font,
+      mime,
+      dataUrl: `data:${mime};base64,${data.toString("base64")}`,
+    };
+  } catch {
+    return null;
+  }
+}
 
 let mainWindow: BrowserWindow | null = null;
 let authWindow: BrowserWindow | null = null;
 let tray: Tray | null = null;
+let agentApiHandle: AgentApiHandle | null = null;
+const discord = new DiscordRpc();
 let isQuitting = false;
 
 const DIST = path.join(__dirname, "../dist");
@@ -167,6 +251,432 @@ async function fetchWithRetry(url: string, init: RequestInit, attempts = 3): Pro
   throw lastError;
 }
 
+/* ==================== Тексты песен (Genius) ==================== */
+
+/**
+ * У Genius нет публичного API для текстов: официальный api.genius.com
+ * отдаёт только метаданные, а сам текст лежит на странице песни.
+ * Поэтому ищем через открытый эндпоинт поиска и разбираем HTML.
+ */
+const GENIUS_ORIGIN = "https://genius.com";
+const GENIUS_TIMEOUT = 12_000;
+const GENIUS_CACHE_TTL = 6 * 60 * 60 * 1000;
+const GENIUS_CACHE_LIMIT = 200;
+
+const GENIUS_HEADERS: Record<string, string> = {
+  "User-Agent": BROWSER_UA,
+  "Accept-Language": "ru-RU,ru;q=0.9,en;q=0.8",
+  Referer: "https://genius.com/",
+};
+
+// Аккаунты переводов и романизаций — это не оригинальный текст песни.
+const GENIUS_TRANSLATION_MARKERS = [
+  "translation",
+  "translations",
+  "romanization",
+  "romanizations",
+  "перевод",
+  "переклад",
+  "çeviri",
+  "traducción",
+  "tradução",
+  "übersetzung",
+  "překlad",
+];
+
+interface GeniusLyricsResult {
+  found: boolean;
+  title?: string;
+  artist?: string;
+  url?: string;
+  lyrics?: string;
+  error?: string;
+}
+
+const geniusCache = new Map<string, { value: GeniusLyricsResult; at: number }>();
+
+/** Приводит название и имя артиста к сравнимому виду. */
+function normalizeGeniusText(value: unknown): string {
+  return String(value ?? "")
+    .toLowerCase()
+    .replace(/\(.*?\)|\[.*?\]/g, " ")
+    .replace(/[^\p{L}\p{N}]+/gu, " ")
+    .replace(/\s+/g, " ")
+    .trim();
+}
+
+/** Декодирует HTML-сущности, которые Genius использует в текстах. */
+function decodeHtmlEntities(text: string): string {
+  return text
+    .replace(/&#x([0-9a-f]+);/gi, (_, hex) => {
+      const code = parseInt(hex, 16);
+      return Number.isFinite(code) ? String.fromCodePoint(code) : "";
+    })
+    .replace(/&#(\d+);/g, (_, num) => {
+      const code = Number(num);
+      return Number.isFinite(code) ? String.fromCodePoint(code) : "";
+    })
+    .replace(/&quot;/g, '"')
+    .replace(/&apos;/g, "'")
+    .replace(/&nbsp;/g, " ")
+    .replace(/&mdash;/g, "—")
+    .replace(/&ndash;/g, "–")
+    .replace(/&laquo;/g, "«")
+    .replace(/&raquo;/g, "»")
+    .replace(/&lt;/g, "<")
+    .replace(/&gt;/g, ">")
+    .replace(/&amp;/g, "&");
+}
+
+/**
+ * Вырезает блоки `<div data-lyrics-container="true">…</div>`.
+ *
+ * Простой регуляркой это не сделать: внутри контейнера бывают вложенные
+ * div (заголовок с авторами и описанием). Поэтому идём по HTML и считаем
+ * открывающие/закрывающие теги, чтобы найти парный `</div>`.
+ */
+function extractGeniusLyrics(html: string): string {
+  const marker = 'data-lyrics-container="true"';
+  const chunks: string[] = [];
+  let from = 0;
+
+  while (true) {
+    const start = html.indexOf(marker, from);
+    if (start === -1) break;
+
+    const tagStart = html.lastIndexOf("<div", start);
+    if (tagStart === -1) break;
+
+    let depth = 0;
+    let i = tagStart;
+    let end = -1;
+
+    while (i < html.length) {
+      const open = html.indexOf("<div", i);
+      const close = html.indexOf("</div>", i);
+      if (close === -1) break;
+
+      if (open !== -1 && open < close) {
+        depth++;
+        i = open + 4;
+      } else {
+        depth--;
+        i = close + 6;
+        if (depth === 0) {
+          end = close + 6;
+          break;
+        }
+      }
+    }
+
+    if (end === -1) break;
+    chunks.push(html.slice(tagStart, end));
+    from = end;
+  }
+
+  let text = chunks
+    .join("\n")
+    .replace(/<br\s*\/?>/gi, "\n")
+    .replace(/<[^>]+>/g, "");
+
+  text = decodeHtmlEntities(text);
+
+  // Перед текстом Genius печатает «N Contributors… Read More».
+  // Отрезаем служебную шапку до первой секции [Intro] / [Куплет] / [Chorus].
+  const firstSection = text.search(/^[ \t]*\[[^\]\n]+\][ \t]*$/m);
+  if (firstSection > 0) {
+    text = text.slice(firstSection);
+  } else {
+    // Если секций нет, хотя бы убираем шапку до «Read More».
+    const readMore = text.indexOf("Read More");
+    if (readMore !== -1 && readMore < 800) {
+      const lineEnd = text.indexOf("\n", readMore);
+      if (lineEnd !== -1) text = text.slice(lineEnd + 1);
+    }
+  }
+
+  return text
+    .replace(/^[ \t]*You might also like[ \t]*$/gim, "")
+    .replace(/[ \t]+\n/g, "\n")
+    .replace(/\n{3,}/g, "\n\n")
+    .trim();
+}
+
+/** Насколько результат поиска похож на нужный трек. */
+function scoreGeniusSong(song: any, title: string, artist: string): number {
+  const wantTitle = normalizeGeniusText(title);
+  const wantArtist = normalizeGeniusText(artist);
+  const songTitle = normalizeGeniusText(song?.title);
+  const songArtist = normalizeGeniusText(song?.primary_artist?.name);
+
+  if (!songTitle || !songArtist) return -100;
+
+  const isTranslation =
+    songArtist.startsWith("genius ") &&
+    GENIUS_TRANSLATION_MARKERS.some((marker) => songArtist.includes(marker));
+  if (isTranslation && songArtist !== wantArtist) return -100;
+
+  let score = 0;
+
+  if (songTitle === wantTitle) {
+    score += 10;
+  } else if (songTitle.includes(wantTitle) || wantTitle.includes(songTitle)) {
+    score += 6;
+  } else {
+    // Названия в SoundCloud часто содержат лишние приписки — сравниваем по словам.
+    const words = wantTitle.split(" ").filter((word) => word.length > 1);
+    if (words.length > 0) {
+      const matched = words.filter((word) => songTitle.includes(word)).length;
+      score += (matched / words.length) * 3;
+    }
+  }
+
+  if (wantArtist && songArtist) {
+    if (songArtist === wantArtist) {
+      score += 8;
+    } else if (songArtist.includes(wantArtist) || wantArtist.includes(songArtist)) {
+      score += 4;
+    }
+  }
+
+  return score;
+}
+
+async function fetchGenius(url: string, asJson: boolean): Promise<any> {
+  const res = await fetch(url, {
+    headers: {
+      ...GENIUS_HEADERS,
+      Accept: asJson ? "application/json" : "text/html,application/xhtml+xml",
+    },
+    signal: AbortSignal.timeout(GENIUS_TIMEOUT),
+  });
+
+  if (!res.ok) throw new Error(`Genius ответил ${res.status}`);
+  return asJson ? res.json() : res.text();
+}
+
+/** Ищет песню на Genius и достаёт из её страницы текст. */
+async function findGeniusLyrics(title: string, artist: string): Promise<GeniusLyricsResult> {
+  const query = `${title} ${artist}`.trim();
+  const search = await fetchGenius(
+    `${GENIUS_ORIGIN}/api/search/multi?per_page=5&q=${encodeURIComponent(query)}`,
+    true
+  );
+
+  const rawHits: any[] = (search?.response?.sections ?? []).flatMap(
+    (section: any) => section?.hits ?? []
+  );
+
+  // Genius иногда отдаёт один и тот же результат дважды.
+  const seen = new Set<number | string>();
+  const songs = rawHits
+    .map((hit) => hit?.result)
+    .filter((song) => song && song.url && song.title)
+    .filter((song) => {
+      const key = song.id ?? song.url;
+      if (seen.has(key)) return false;
+      seen.add(key);
+      return true;
+    });
+
+  const ranked = songs
+    .map((song) => ({ song, score: scoreGeniusSong(song, title, artist) }))
+    .sort((a, b) => b.score - a.score);
+
+  // Слишком слабые совпадения пропускаем: лучше честное «не найдено»,
+  // чем текст совсем другой песни.
+  for (const { song, score } of ranked.slice(0, 3)) {
+    if (score < 4) continue;
+
+    try {
+      const html = await fetchGenius(song.url, false);
+      const lyrics = extractGeniusLyrics(html);
+      if (lyrics.length >= 80) {
+        return {
+          found: true,
+          title: song.title,
+          artist: song.primary_artist?.name ?? artist,
+          url: song.url,
+          lyrics,
+        };
+      }
+    } catch (e) {
+      log.warn(`Genius: не удалось открыть ${song.url}`, e);
+    }
+  }
+
+  return { found: false };
+}
+
+/** Кэш на 6 часов: тексты не меняются, а Genius не любит частые запросы. */
+async function getGeniusLyrics(title: string, artist: string): Promise<GeniusLyricsResult> {
+  const key = `${title.toLowerCase()}|${artist.toLowerCase()}`;
+  const cached = geniusCache.get(key);
+
+  if (cached && Date.now() - cached.at < GENIUS_CACHE_TTL) {
+    return cached.value;
+  }
+
+  let result: GeniusLyricsResult;
+
+  try {
+    result = await findGeniusLyrics(title, artist);
+  } catch (e) {
+    log.warn("Genius: поиск не удался", e);
+    // Ошибку сети не кэшируем — при следующем открытии попробуем снова.
+    return {
+      found: false,
+      error: e instanceof Error ? e.message : "Не удалось обратиться к Genius",
+    };
+  }
+
+  geniusCache.set(key, { value: result, at: Date.now() });
+
+  while (geniusCache.size > GENIUS_CACHE_LIMIT) {
+    const oldest = geniusCache.keys().next().value;
+    if (oldest === undefined) break;
+    geniusCache.delete(oldest);
+  }
+
+  return result;
+}
+
+/* ==================== Синхронизация текста (LRCLIB) ==================== */
+
+/**
+ * Genius не отдаёт тайминги строк. Для караоке берём их из LRCLIB —
+ * открытого каталога LRC-текстов. Если там ничего нет, панель
+ * раскладывает строки по длительности трека сама.
+ */
+const LRCLIB_API = "https://lrclib.net/api/search";
+const LRCLIB_UA = "SoundWave/0.1 (https://github.com/c4elovek-cmd/SoundWave)";
+const LRCLIB_TIMEOUT = 10_000;
+const LRCLIB_CACHE_TTL = 6 * 60 * 60 * 1000;
+const LRCLIB_CACHE_LIMIT = 200;
+
+interface SyncedLyricsResult {
+  found: boolean;
+  syncedLyrics?: string;
+  title?: string;
+  artist?: string;
+  duration?: number;
+  error?: string;
+}
+
+const lrclibCache = new Map<string, { value: SyncedLyricsResult; at: number }>();
+
+function scoreLrcTrack(entry: any, title: string, artist: string, durationMs: number): number {
+  const wantTitle = normalizeGeniusText(title);
+  const wantArtist = normalizeGeniusText(artist);
+  const trackTitle = normalizeGeniusText(entry?.trackName);
+  const trackArtist = normalizeGeniusText(entry?.artistName);
+
+  if (!trackTitle) return -100;
+
+  let score = 0;
+
+  if (trackTitle === wantTitle) {
+    score += 10;
+  } else if (trackTitle.includes(wantTitle) || wantTitle.includes(trackTitle)) {
+    score += 6;
+  } else {
+    const words = wantTitle.split(" ").filter((word) => word.length > 1);
+    if (words.length > 0) {
+      const matched = words.filter((word) => trackTitle.includes(word)).length;
+      score += (matched / words.length) * 3;
+    }
+  }
+
+  if (wantArtist && trackArtist) {
+    if (trackArtist === wantArtist) {
+      score += 8;
+    } else if (trackArtist.includes(wantArtist) || wantArtist.includes(trackArtist)) {
+      score += 4;
+    }
+  }
+
+  // Длительность помогает выбрать нужную версию среди ремиксов.
+  if (durationMs > 0 && entry?.duration) {
+    const diff = Math.abs(entry.duration * 1000 - durationMs);
+    if (diff <= 3000) score += 4;
+    else if (diff <= 10_000) score += 2;
+    else if (diff > 45_000) score -= 3;
+  }
+
+  return score;
+}
+
+async function getSyncedLyrics(
+  title: string,
+  artist: string,
+  durationMs: number
+): Promise<SyncedLyricsResult> {
+  const cacheKey = `${title.toLowerCase()}|${artist.toLowerCase()}|${Math.round(durationMs / 1000)}`;
+  const cached = lrclibCache.get(cacheKey);
+
+  if (cached && Date.now() - cached.at < LRCLIB_CACHE_TTL) {
+    return cached.value;
+  }
+
+  let result: SyncedLyricsResult;
+
+  try {
+    const url =
+      `${LRCLIB_API}?track_name=${encodeURIComponent(title)}` +
+      `&artist_name=${encodeURIComponent(artist)}`;
+
+    const res = await fetch(url, {
+      headers: { "User-Agent": LRCLIB_UA, Accept: "application/json" },
+      signal: AbortSignal.timeout(LRCLIB_TIMEOUT),
+    });
+
+    if (!res.ok) throw new Error(`LRCLIB ответил ${res.status}`);
+
+    const list = await res.json();
+    if (!Array.isArray(list)) throw new Error("LRCLIB вернул неожиданный ответ");
+
+    const candidates = list
+      .filter((entry) => entry && typeof entry.syncedLyrics === "string")
+      .filter((entry) => entry.syncedLyrics.trim().length > 20)
+      .map((entry) => ({
+        entry,
+        score: scoreLrcTrack(entry, title, artist, durationMs),
+      }))
+      .sort((a, b) => b.score - a.score);
+
+    const best = candidates[0];
+
+    if (best && best.score >= 6) {
+      result = {
+        found: true,
+        syncedLyrics: best.entry.syncedLyrics,
+        title: best.entry.trackName,
+        artist: best.entry.artistName,
+        duration: best.entry.duration,
+      };
+    } else {
+      result = { found: false };
+    }
+  } catch (e) {
+    log.warn("LRCLIB: не удалось получить синхронизацию", e);
+    // Ошибку не кэшируем: при следующем включении караоке попробуем снова.
+    return {
+      found: false,
+      error: e instanceof Error ? e.message : "Не удалось обратиться к LRCLIB",
+    };
+  }
+
+  lrclibCache.set(cacheKey, { value: result, at: Date.now() });
+
+  while (lrclibCache.size > LRCLIB_CACHE_LIMIT) {
+    const oldest = lrclibCache.keys().next().value;
+    if (oldest === undefined) break;
+    lrclibCache.delete(oldest);
+  }
+
+  return result;
+}
+
 /**
  * Заголовки для запросов к SoundCloud из main-процесса.
  * Там нет CORS-ограничений, и Cookie можно передавать свободно.
@@ -190,6 +700,31 @@ async function apiHeaders(): Promise<Record<string, string>> {
   return headers;
 }
 
+/** Поднимает локальный API для агентов, если он включён в настройках. */
+async function startAgentApiIfEnabled(): Promise<void> {
+  if (!store.get("agentApiEnabled")) {
+    log.info("Agent API выключен в настройках");
+    return;
+  }
+
+  try {
+    agentApiHandle = await startAgentApi({
+      getWindow: () => mainWindow,
+      port: Number(store.get("agentApiPort") ?? 4783),
+      token: getAgentToken(),
+    });
+  } catch (error) {
+    log.error("Agent API не запустился:", error);
+  }
+}
+
+/** Перезапускает API — после смены порта, токена или включения. */
+async function restartAgentApi(): Promise<void> {
+  agentApiHandle?.close();
+  agentApiHandle = null;
+  await startAgentApiIfEnabled();
+}
+
 function createWindow() {
   const bounds = store.get("windowBounds") as { width: number; height: number };
 
@@ -200,6 +735,8 @@ function createWindow() {
     minHeight: 600,
     title: "SoundWave",
     backgroundColor: "#121212",
+    icon: appIconPath(),
+    autoHideMenuBar: true,
     show: false,
     webPreferences: {
       preload: path.join(__dirname, "preload.cjs"),
@@ -235,6 +772,16 @@ function createWindow() {
       const [width, height] = mainWindow.getSize();
       store.set("windowBounds", { width, height });
     }
+  });
+
+  // Полноэкранный режим: сообщаем рендереру, чтобы он мог закрыть караоке
+  // или восстановить окно, если пользователь вышел через Esc.
+  mainWindow.on("enter-full-screen", () => {
+    mainWindow?.webContents.send("app-fullscreen-changed", true);
+  });
+
+  mainWindow.on("leave-full-screen", () => {
+    mainWindow?.webContents.send("app-fullscreen-changed", false);
   });
 
   // Загрузка
@@ -279,6 +826,8 @@ function createAuthWindow(hash = "/auth"): BrowserWindow {
     height: 700,
     title: "SoundWave — Вход в SoundCloud",
     backgroundColor: "#121212",
+    icon: appIconPath(),
+    autoHideMenuBar: true,
     parent: mainWindow || undefined,
     modal: Boolean(mainWindow),
     show: false,
@@ -387,28 +936,21 @@ async function startSoundCloudLogin() {
 }
 
 function createTray() {
-  // Иконка трея — создаём программно оранжевый круг
-  const iconSize = 16;
-  const canvas = nativeImage.createEmpty();
-  
-  // Простая иконка: оранжевый круг
-  const trayIcon = nativeImage.createFromBuffer(
-    Buffer.from(
-      `iVBORw0KGgoAAAANSUhEUgAAABAAAAAQCAYAAAAf8/9hAAAACXBIWXMAAAsTAAALEwEAmpwYAAAA
-      GXRFWHRTb2Z0d2FyZQBBZG9iZSBJbWFnZVJlYWR5ccllPAAAAyJpVFh0WE1MOmNvbS5hZG9iZS54
-      bXAAAAAAADw/eHBhY2tldCBiZWdpbj0i77u/IiBpZD0iVzVNME1wQ2VoaUh6cmVTek5UY3prYzlk
-      Ij8+IDx4OnhtcG1ldGEgeG1sbnM6eD0iYWRvYmU6bnM6bWV0YS8iIHg6eG1wdGs9IkFkb2JlIFhN
-      UCBDb3JlIDUuMy1jMDExIDY2LjE0NTY2MSwgMjAxMi8wMi8wNi0xNDo1NjoyNyAgICAgICAgIj4g
-      PHJkZjpSREYgeG1sbnM6cmRmPSJodHRwOi8vd3d3LnczLm9yZy8xOTk5LzAyLzIyLXJkZi1zeW50
-      Yy1jZWMiPiA8cmRmOkRlc2NyaXB0aW9uIHJkZjphYm91dD0iIi8+IDwvcmRmOlJERj4gPC94Onht
-      cG1ldGE+IDw/eHBhY2tldCBlbmQ9InIiPz6qKp3zAAAASklEQVR42mL8//8/AyWYgQETIP7//39G
-      Dg4OBg4ODgZOTk4GTk5OBi4uLgZubu4/+Pj4GPj5+Rn4+fkZ+Pj4GPj5+Rn4+PgY+Pn5Gfj5+Rn4
-      +fkZ+Pn5Gfj5+Rn+AUDpFxkMAHqsGAAAAABJRU5ErkJggg==`,
-      "base64"
-    )
-  );
+  // Иконка берётся из resources: ICO содержит размеры 16–256 px,
+  // поэтому Windows сам выбирает нужный вариант для панели задач.
+  const iconPath = appIconPath();
 
-  tray = new Tray(trayIcon);
+  if (!existsSync(iconPath)) {
+    log.warn("Иконка трея не найдена:", iconPath);
+    return;
+  }
+
+  try {
+    tray = new Tray(iconPath);
+  } catch (e) {
+    log.error("Не удалось создать иконку трея:", e);
+    return;
+  }
 
   const contextMenu = Menu.buildFromTemplate([
     {
@@ -554,6 +1096,7 @@ function setupIPC() {  // Получить сохранённые настрой
       theme: store.get("theme"),
       volume: store.get("volume"),
       loggedIn: store.get("loggedIn"),
+      version: app.getVersion(),
     };
   });
 
@@ -679,6 +1222,46 @@ function setupIPC() {  // Получить сохранённые настрой
 
   // client_id — нужен рендереру для построения ссылок
   ipcMain.handle("get-client-id", () => getClientId());
+
+  // Текст песни с Genius: официального API у них нет, поэтому ищем
+  // через публичный поиск и разбираем страницу.
+  ipcMain.handle(
+    "genius-lyrics",
+    async (_event, payload: { title?: string; artist?: string }) => {
+      const title = String(payload?.title ?? "").trim();
+      const artist = String(payload?.artist ?? "").trim();
+
+      if (!title) return { found: false, error: "Не указано название трека" };
+      return getGeniusLyrics(title, artist);
+    }
+  );
+
+  // Тайминги строк для караоке — из открытого каталога LRCLIB.
+  ipcMain.handle(
+    "synced-lyrics",
+    async (_event, payload: { title?: string; artist?: string; duration?: number }) => {
+      const title = String(payload?.title ?? "").trim();
+      const artist = String(payload?.artist ?? "").trim();
+      const duration = Number(payload?.duration ?? 0) || 0;
+
+      if (!title) return { found: false };
+      return getSyncedLyrics(title, artist, duration);
+    }
+  );
+
+  // Внешние ссылки открываем в системном браузере, а не в новом окне Electron.
+  // Разрешаем только https и только Genius — мало ли что придёт из рендерера.
+  ipcMain.handle("open-external", async (_event, rawUrl: string) => {
+    try {
+      const url = new URL(String(rawUrl));
+      if (url.protocol !== "https:") return false;
+      if (!/(^|\.)genius\.com$/i.test(url.hostname)) return false;
+      await shell.openExternal(url.toString());
+      return true;
+    } catch {
+      return false;
+    }
+  });
 
   // Текущие cookies сессии (чтобы показать, что реально есть)
   ipcMain.handle("dump-session-cookies", async () => {
@@ -806,6 +1389,188 @@ function setupIPC() {  // Получить сохранённые настрой
     return true;
   });
 
+  // Полноэкранный режим окна — для караоке на весь экран
+  ipcMain.handle("set-fullscreen", (_event, value: boolean) => {
+    if (!mainWindow || mainWindow.isDestroyed()) return false;
+    mainWindow.setFullScreen(Boolean(value));
+    return mainWindow.isFullScreen();
+  });
+
+  /* ==================== Свои шрифты ==================== */
+
+  ipcMain.handle("fonts-list", () => {
+    return listStoredFonts()
+      .map((font) => fontEntry(font))
+      .filter((font): font is NonNullable<typeof font> => Boolean(font));
+  });
+
+  ipcMain.handle("fonts-import", async () => {
+    const options: Electron.OpenDialogOptions = {
+      title: "Выберите файл шрифта",
+      properties: ["openFile"],
+      filters: [{ name: "Шрифты", extensions: FONT_EXTENSIONS }],
+    };
+
+    const result =
+      mainWindow && !mainWindow.isDestroyed()
+        ? await dialog.showOpenDialog(mainWindow, options)
+        : await dialog.showOpenDialog(options);
+
+    if (result.canceled || result.filePaths.length === 0) return null;
+
+    const source = result.filePaths[0];
+    const ext = path.extname(source).slice(1).toLowerCase();
+    if (!FONT_EXTENSIONS.includes(ext)) return null;
+
+    const base = path.basename(source, path.extname(source));
+    const id = randomBytes(6).toString("hex");
+    const file = `${id}-${base.replace(/[^\w.-]+/g, "_")}.${ext}`;
+
+    mkdirSync(fontsDir(), { recursive: true });
+    copyFileSync(source, path.join(fontsDir(), file));
+
+    const font: StoredFont = { id, name: base, family: `SWFont${id}`, file };
+    store.set("customFonts", [
+      ...listStoredFonts().filter((item) => item.id !== id),
+      font,
+    ]);
+
+    return fontEntry(font);
+  });
+
+  ipcMain.handle("fonts-remove", (_event, id: string) => {
+    const fonts = listStoredFonts();
+    const font = fonts.find((item) => item.id === id);
+    if (!font) return false;
+
+    try {
+      unlinkSync(path.join(fontsDir(), font.file));
+    } catch {
+      // Файла уже нет — не страшно.
+    }
+
+    store.set("customFonts", fonts.filter((item) => item.id !== id));
+    return true;
+  });
+
+  /* ==================== Discord Rich Presence ==================== */
+
+  ipcMain.handle("discord-status", () => ({
+    enabled: Boolean(store.get("discordEnabled")),
+    clientId: String(store.get("discordClientId") ?? ""),
+    largeImage: String(store.get("discordLargeImage") ?? ""),
+    connected: discord.isConnected,
+  }));
+
+  ipcMain.handle(
+    "discord-config",
+    async (
+      _event,
+      payload?: { enabled?: boolean; clientId?: string; largeImage?: string }
+    ) => {
+      if (payload?.enabled !== undefined) {
+        store.set("discordEnabled", Boolean(payload.enabled));
+      }
+      if (payload?.clientId !== undefined) {
+        store.set("discordClientId", String(payload.clientId).trim());
+      }
+      if (payload?.largeImage !== undefined) {
+        store.set("discordLargeImage", String(payload.largeImage).trim());
+      }
+
+      const enabled = Boolean(store.get("discordEnabled"));
+      const clientId = String(store.get("discordClientId") ?? "");
+
+      if (enabled && clientId) {
+        await discord.connect(clientId);
+      } else {
+        discord.stop();
+      }
+
+      return {
+        enabled,
+        clientId,
+        largeImage: String(store.get("discordLargeImage") ?? ""),
+        connected: discord.isConnected,
+      };
+    }
+  );
+
+  ipcMain.handle(
+    "discord-presence",
+    (
+      _event,
+      presence?:
+        | {
+            details?: string;
+            state?: string;
+            largeText?: string;
+            smallText?: string;
+            startTimestamp?: number;
+          }
+        | null
+    ) => {
+      if (!store.get("discordEnabled")) return false;
+
+      if (!presence) {
+        discord.setActivity(null);
+        return true;
+      }
+
+      discord.setActivity({
+        details: presence.details,
+        state: presence.state,
+        largeText: presence.largeText,
+        smallText: presence.smallText,
+        largeImageKey: String(store.get("discordLargeImage") ?? "") || undefined,
+        largeImageText: presence.largeText,
+        startTimestamp: presence.startTimestamp,
+      });
+
+      return true;
+    }
+  );
+
+  /* ==================== Настройки локального API ==================== */
+
+  ipcMain.handle(
+    "agent-api-config",
+    async (
+      _event,
+      payload?: { enabled?: boolean; port?: number; regenerateToken?: boolean }
+    ) => {
+      if (payload?.enabled !== undefined) {
+        store.set("agentApiEnabled", Boolean(payload.enabled));
+      }
+
+      if (payload?.port !== undefined) {
+        const port = Number(payload.port);
+        if (Number.isFinite(port) && port > 1024 && port < 65536) {
+          store.set("agentApiPort", Math.round(port));
+        }
+      }
+
+      if (payload?.regenerateToken) {
+        store.set("agentApiToken", randomBytes(24).toString("hex"));
+      }
+
+      await restartAgentApi();
+
+      return {
+        enabled: Boolean(store.get("agentApiEnabled")),
+        port: Number(store.get("agentApiPort") ?? 4783),
+        token: getAgentToken(),
+        url: agentApiHandle?.url ?? null,
+      };
+    }
+  );
+
+  // Открыть папку с данными приложения
+  ipcMain.handle("open-user-data", () => {
+    void shell.openPath(app.getPath("userData"));
+    return true;
+  });
+
   log.info("IPC handlers зарегистрированы");
 }
 
@@ -822,10 +1587,23 @@ if (!hasSingleInstanceLock) {
 
   app.whenReady().then(() => {
     log.info("Приложение готово");
+    // Убираем стандартное меню File / Edit / View / Window / Help.
+    // Контекстное меню трея задаётся отдельно и продолжает работать.
+    Menu.setApplicationMenu(null);
     createWindow();
     createTray();
     registerGlobalShortcuts();
     setupIPC();
+
+    // Локальный HTTP API для агентов. Порт по умолчанию 4783,
+    // если занят — берётся следующий свободный.
+    void startAgentApiIfEnabled();
+
+    // Discord Rich Presence — если включён и задан Client ID.
+    if (store.get("discordEnabled")) {
+      const clientId = String(store.get("discordClientId") ?? "");
+      if (clientId) void discord.connect(clientId);
+    }
   });
 }
 
@@ -846,6 +1624,9 @@ app.on("activate", () => {
 
 app.on("before-quit", () => {
   isQuitting = true;
+  agentApiHandle?.close();
+  agentApiHandle = null;
+  discord.stop();
   globalShortcut.unregisterAll();
   log.info("Приложение закрывается");
 });

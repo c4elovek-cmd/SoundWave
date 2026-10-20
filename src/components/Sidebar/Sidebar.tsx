@@ -5,23 +5,20 @@ import {
   MusicNotes,
   Heart,
   CloudArrowUp,
-  CaretLeft,
   CaretRight,
   SidebarSimple,
   Queue,
   Gear,
   SignOut,
   Waveform,
+  Plus,
+  PencilSimple,
+  Sliders,
 } from "@phosphor-icons/react";
-import { useAppStore, Theme } from "../../stores/appStore";
+import { useAppStore } from "../../stores/appStore";
+import { BUILTIN_THEMES, CustomTheme, themeDataId } from "../../lib/themes";
+import ThemeEditor from "../ThemeEditor/ThemeEditor";
 import "./Sidebar.css";
-
-const THEMES: { id: Theme; label: string }[] = [
-  { id: "dark", label: "Тёмная (SoundCloud Orange)" },
-  { id: "light", label: "Светлая" },
-  { id: "purple", label: "Фиолетовая" },
-  { id: "green", label: "Зелёная" },
-];
 
 export default function Sidebar() {
   const {
@@ -32,10 +29,15 @@ export default function Sidebar() {
     playlists,
     theme,
     setTheme,
+    customThemes,
+    saveCustomTheme,
+    deleteCustomTheme,
     isLoggedIn,
     currentUser,
+    openSettings,
   } = useAppStore();
   const [themeMenuOpen, setThemeMenuOpen] = useState(false);
+  const [editor, setEditor] = useState<"new" | CustomTheme | null>(null);
 
   const navItems = [
     { id: "home" as const, label: "Главная", icon: House },
@@ -48,9 +50,26 @@ export default function Sidebar() {
 
   return (
     <aside className={`sidebar ${sidebarCollapsed ? "collapsed" : ""}`}>
-      <div className="logo" onClick={() => setView("home")} style={{ cursor: "pointer" }}>
-        <div className="logo-mark">S</div>
-        <span>SoundWave</span>
+      <div className="sidebar-header">
+        <div className="logo" onClick={() => setView("home")} title="На главную">
+          <div className="logo-mark">S</div>
+          <span className="logo-text">SoundWave</span>
+        </div>
+        <button
+          className="sidebar-toggle"
+          onClick={() => {
+            if (!sidebarCollapsed) setThemeMenuOpen(false);
+            toggleSidebar();
+          }}
+          title={sidebarCollapsed ? "Развернуть панель" : "Свернуть панель"}
+          aria-label={sidebarCollapsed ? "Развернуть панель" : "Свернуть панель"}
+        >
+          {sidebarCollapsed ? (
+            <CaretRight size={18} weight="bold" />
+          ) : (
+            <SidebarSimple size={18} />
+          )}
+        </button>
       </div>
 
       <nav className="nav-list">
@@ -64,7 +83,7 @@ export default function Sidebar() {
             <span className="nav-icon">
               <Icon size={20} weight={view === id ? "fill" : "regular"} />
             </span>
-            <span>{label}</span>
+            <span className="nav-label">{label}</span>
           </button>
         ))}
       </nav>
@@ -74,7 +93,10 @@ export default function Sidebar() {
       <div className="sidebar-section-title">Плейлисты</div>
       <div className="playlist-list">
         {playlists.length === 0 && (
-          <div style={{ padding: "8px 16px", fontSize: 12, color: "var(--text-disabled)" }}>
+          <div
+            className="sidebar-empty"
+            style={{ padding: "8px 16px", fontSize: 12, color: "var(--text-disabled)" }}
+          >
             Пока пусто
           </div>
         )}
@@ -100,23 +122,24 @@ export default function Sidebar() {
       <div className="sidebar-divider" />
 
       <div className="nav-list">
-        <button
-          className="nav-item"
-          onClick={toggleSidebar}
-          title={sidebarCollapsed ? "Развернуть" : "Свернуть"}
-        >
-          <span className="nav-icon">
-            <SidebarSimple size={20} />
-          </span>
-          <span>Свернуть</span>
-        </button>
-
         <div style={{ position: "relative" }}>
-          <button className="nav-item" onClick={() => setThemeMenuOpen((v) => !v)} title="Тема">
+          <button
+            className="nav-item"
+            onClick={() => {
+              // В свёрнутой панели меню тем не помещается — сначала разворачиваем.
+              if (sidebarCollapsed) {
+                toggleSidebar();
+                setThemeMenuOpen(true);
+                return;
+              }
+              setThemeMenuOpen((v) => !v);
+            }}
+            title="Тема"
+          >
             <span className="nav-icon">
               <Gear size={20} />
             </span>
-            <span>Настройки</span>
+            <span className="nav-label">Настройки</span>
           </button>
           {themeMenuOpen && (
             <div
@@ -133,34 +156,100 @@ export default function Sidebar() {
                 marginBottom: 6,
               }}
             >
-              <div style={{ fontSize: 11, color: "var(--text-disabled)", padding: "6px 8px", textTransform: "uppercase", fontWeight: 700 }}>
-                Тема
-              </div>
-              {THEMES.map((t) => (
+              <div className="theme-menu-label">Тема</div>
+              {BUILTIN_THEMES.map((t) => (
                 <button
                   key={t.id}
-                  className="nav-item"
-                  style={{ padding: "8px 10px", fontSize: 12 }}
+                  className="nav-item theme-menu-item"
                   onClick={() => {
                     setTheme(t.id);
                     setThemeMenuOpen(false);
                   }}
                 >
                   <span
+                    className="theme-dot"
                     style={{
-                      width: 12,
-                      height: 12,
-                      borderRadius: 3,
-                      background:
-                        t.id === "dark" ? "#ff5500" :
-                        t.id === "light" ? "#f5f5f5" :
-                        t.id === "purple" ? "#a855f7" : "#1db954",
-                      border: theme === t.id ? "2px solid var(--text-primary)" : "1px solid var(--border)",
+                      background: t.accent,
+                      border:
+                        theme === t.id
+                          ? "2px solid var(--text-primary)"
+                          : "1px solid var(--border)",
                     }}
                   />
                   <span>{t.label}</span>
                 </button>
               ))}
+
+              {customThemes.length > 0 && (
+                <div className="theme-menu-label">Свои темы</div>
+              )}
+
+              {customThemes.map((t) => {
+                const id = themeDataId(t);
+                return (
+                  <div key={t.id} className="theme-custom-row">
+                    <button
+                      className="nav-item theme-menu-item"
+                      onClick={() => {
+                        setTheme(id);
+                        setThemeMenuOpen(false);
+                      }}
+                      title={t.name}
+                    >
+                      <span
+                        className="theme-dot"
+                        style={{
+                          background: t.accent,
+                          border:
+                            theme === id
+                              ? "2px solid var(--text-primary)"
+                              : "1px solid var(--border)",
+                        }}
+                      />
+                      <span className="theme-custom-name">{t.name}</span>
+                    </button>
+                    <button
+                      className="theme-edit-btn"
+                      onClick={() => {
+                        setEditor(t);
+                        setThemeMenuOpen(false);
+                      }}
+                      title="Изменить тему"
+                    >
+                      <PencilSimple size={13} />
+                    </button>
+                  </div>
+                );
+              })}
+
+              <button
+                className="nav-item theme-menu-item"
+                onClick={() => {
+                  setEditor("new");
+                  setThemeMenuOpen(false);
+                }}
+              >
+                <span className="nav-icon">
+                  <Plus size={16} />
+                </span>
+                <span className="nav-label">Своя тема</span>
+              </button>
+
+              <div className="sidebar-divider" style={{ margin: "6px 4px" }} />
+
+              <button
+                className="nav-item theme-menu-item"
+                onClick={() => {
+                  setThemeMenuOpen(false);
+                  openSettings();
+                }}
+                title="Все настройки: шрифты, плеер, Discord, API"
+              >
+                <span className="nav-icon">
+                  <Sliders size={16} />
+                </span>
+                <span className="nav-label">Все настройки…</span>
+              </button>
             </div>
           )}
         </div>
@@ -176,10 +265,25 @@ export default function Sidebar() {
             <span className="nav-icon">
               <SignOut size={20} />
             </span>
-            <span>Выйти {currentUser ? `(${currentUser.username})` : ""}</span>
+            <span className="nav-label">Выйти {currentUser ? `(${currentUser.username})` : ""}</span>
           </button>
         )}
       </div>
+
+      {editor && (
+        <ThemeEditor
+          initial={editor === "new" ? undefined : editor}
+          onSave={(nextTheme) => {
+            saveCustomTheme(nextTheme);
+            setEditor(null);
+          }}
+          onDelete={(id) => {
+            deleteCustomTheme(id);
+            setEditor(null);
+          }}
+          onClose={() => setEditor(null)}
+        />
+      )}
     </aside>
   );
 }

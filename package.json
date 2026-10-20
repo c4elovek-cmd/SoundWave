@@ -1,15 +1,17 @@
 {
   "name": "soundwave",
   "private": true,
-  "version": "0.1.0",
+  "version": "0.2.0",
   "description": "Десктопный клиент SoundCloud в стиле Spotify",
+  "author": "c4elovek-cmd",
+  "license": "MIT",
   "main": "dist-electron/main.js",
   "type": "module",
   "scripts": {
     "dev": "vite",
     "build": "vite build",
     "electron": "vite build && electron .",
-    "package": "vite build && electron-builder"
+    "package": "vite build && electron-builder --win nsis portable"
   },
   "dependencies": {
     "@phosphor-icons/react": "^2.1.7",
@@ -20,12 +22,66 @@
     "react-dom": "^18.3.1",
     "zustand": "^5.0.3"
   },
+  "build": {
+    "appId": "com.c4elovek.soundwave",
+    "productName": "SoundWave",
+    "copyright": "Copyright © 2026 c4elovek-cmd",
+    "directories": {
+      "output": "release",
+      "buildResources": "resources"
+    },
+    "files": [
+      "dist/**/*",
+      "dist-electron/**/*",
+      "package.json"
+    ],
+    "extraResources": [
+      {
+        "from": "resources/icon.ico",
+        "to": "icon.ico"
+      },
+      {
+        "from": "resources/icon.png",
+        "to": "icon.png"
+      }
+    ],
+    "win": {
+      "icon": "resources/icon.ico",
+      "target": [
+        {
+          "target": "nsis",
+          "arch": [
+            "x64"
+          ]
+        },
+        {
+          "target": "portable",
+          "arch": [
+            "x64"
+          ]
+        }
+      ]
+    },
+    "nsis": {
+      "oneClick": false,
+      "perMachine": false,
+      "allowToChangeInstallationDirectory": true,
+      "createDesktopShortcut": true,
+      "createStartMenuShortcut": true,
+      "shortcutName": "SoundWave",
+      "artifactName": "SoundWave-Setup-${version}.${ext}"
+    },
+    "portable": {
+      "artifactName": "SoundWave-Portable-${version}.${ext}"
+    }
+  },
   "devDependencies": {
     "@types/node": "^26.6.5",
     "@types/react": "^18.3.18",
     "@types/react-dom": "^18.3.5",
     "@vitejs/plugin-react": "^4.3.4",
     "electron": "^33.4.0",
+    "electron-builder": "^26.15.3",
     "typescript": "~5.6.3",
     "vite": "^6.0.11",
     "vite-plugin-electron": "^1.1.2",

@@ -12,6 +12,8 @@ import {
   SpeakerX,
   Queue,
   MusicNotes,
+  TextAa,
+  Microphone,
 } from "@phosphor-icons/react";
 import { usePlayerStore } from "../../stores/playerStore";
 import { useAppStore } from "../../stores/appStore";
@@ -40,7 +42,14 @@ export default function Player() {
     setProgress,
   } = usePlayerStore();
 
-  const { toggleQueue, queueVisible } = useAppStore();
+  const {
+    toggleQueue,
+    queueVisible,
+    toggleLyrics,
+    lyricsVisible,
+    openKaraokeFullscreen,
+    karaokeFullscreen,
+  } = useAppStore();
   const [localProgress, setLocalProgress] = useState(0);
   const rafRef = useRef<number | null>(null);
   const progressBarRef = useRef<HTMLDivElement>(null);
@@ -81,6 +90,8 @@ export default function Player() {
     const onKey = (e: KeyboardEvent) => {
       const target = e.target as HTMLElement;
       if (target.tagName === "INPUT" || target.tagName === "TEXTAREA") return;
+      // В полноэкранном караоке пробелом управляет сам оверлей.
+      if (useAppStore.getState().karaokeFullscreen) return;
 
       switch (e.code) {
         case "Space":
@@ -205,6 +216,22 @@ export default function Player() {
 
       {/* Правая часть — громкость и очередь */}
       <div className="player-right">
+        <button
+          className={`icon-btn ${karaokeFullscreen ? "active" : ""}`}
+          onClick={openKaraokeFullscreen}
+          title="Караоке на весь экран"
+        >
+          <Microphone size={19} />
+        </button>
+
+        <button
+          className={`icon-btn ${lyricsVisible ? "active" : ""}`}
+          onClick={toggleLyrics}
+          title="Текст песни"
+        >
+          <TextAa size={19} />
+        </button>
+
         <button
           className={`icon-btn ${queueVisible ? "active" : ""}`}
           onClick={toggleQueue}

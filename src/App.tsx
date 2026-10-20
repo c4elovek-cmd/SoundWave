@@ -1,4 +1,4 @@
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import {
   CaretLeft,
   CaretRight,
@@ -10,6 +10,9 @@ import {
 } from "@phosphor-icons/react";
 import Sidebar from "./components/Sidebar/Sidebar";
 import Player from "./components/Player/Player";
+import LyricsPanel from "./components/Lyrics/LyricsPanel";
+import KaraokeFullscreen from "./components/Lyrics/KaraokeFullscreen";
+import SettingsModal from "./components/Settings/SettingsModal";
 import HomePage from "./pages/HomePage";
 import WavePage from "./pages/WavePage";
 import SearchPage from "./pages/SearchPage";
@@ -19,6 +22,9 @@ import ManualAuthPage from "./pages/ManualAuthPage";
 import { useAppStore } from "./stores/appStore";
 import { usePlayerStore } from "./stores/playerStore";
 import { setAuthCookies } from "./lib/soundcloud-api";
+import { startAgentBridge } from "./lib/agentBridge";
+import { syncCustomFonts } from "./lib/fonts";
+import { useSettingsStore } from "./stores/settingsStore";
 import "./components/Layout/Layout.css";
 
 export default function App() {
@@ -28,15 +34,17 @@ export default function App() {
     isLoggedIn,
     setLoggedIn,
     currentUser,
-    theme,
-    setTheme,
     queueVisible,
     toggleQueue,
+    lyricsVisible,
+    karaokeFullscreen,
+    settingsOpen,
   } = useAppStore();
   const { queue, queueIndex, play, currentTrack, isPlaying, togglePlay, next, prev, removeFromQueue } =
     usePlayerStore();
   const [isAuthRoute, setIsAuthRoute] = useState<"none" | "real" | "manual">("none");
   const [loginMenuOpen, setLoginMenuOpen] = useState(false);
+  const presenceStart = useRef(Math.floor(Date.now() / 1000));
 
   // Определяем, какое окно открыто (главное или окно входа)
   useEffect(() => {
@@ -52,18 +60,82 @@ export default function App() {
     return () => window.removeEventListener("hashchange", readHash);
   }, []);
 
+  // Локальный API для агентов — только в главном окне, не в окне входа.
+  useEffect(() => {
+    if (!window.electronAPI || window.location.hash.startsWith("#/auth")) return;
+    return startAgentBridge();
+  }, []);
+
+  // Настройки внешнего вида: анимации и плотность.
+  useEffect(() => {
+    const apply = () => {
+      const settings = useSettingsStore.getState();
+      document.documentElement.classList.toggle("no-animations", !settings.animations);
+      document.documentElement.classList.toggle(
+        "density-compact",
+        settings.density === "compact"
+      );
+    };
+
+    apply();
+    return useSettingsStore.subscribe(apply);
+  }, []);
+
+  // Стартовое состояние плеера и сайдбара из настроек.
+  useEffect(() => {
+    const settings = useSettingsStore.getState();
+
+    useAppStore.getState().setSidebarCollapsed(settings.sidebarCollapsed);
+
+    const player = usePlayerStore.getState();
+    player.setVolume(settings.volume);
+    player.setRepeat(settings.repeatOnStart);
+    if (settings.shuffleOnStart && !player.isShuffled) player.toggleShuffle();
+  }, []);
+
+  // Свои шрифты: регистрируем в document.fonts при старте.
+  useEffect(() => {
+    void syncCustomFonts().then((fonts) =>
+      useSettingsStore.getState().setCustomFonts(fonts)
+    );
+  }, []);
+
+  // Discord Rich Presence: держим активность в текущем состоянии.
+  useEffect(() => {
+    const update = () => {
+      const { currentTrack, isPlaying } = usePlayerStore.getState();
+
+      if (!currentTrack) {
+        void window.electronAPI?.setDiscordPresence?.(null);
+        return;
+      }
+
+      void window.electronAPI?.setDiscordPresence?.({
+        details: currentTrack.title,
+        state: isPlaying ? (currentTrack.user?.username ?? "SoundWave") : "пауза",
+        largeText: "SoundWave",
+        smallText: isPlaying ? "Сейчас играет" : "На паузе",
+        startTimestamp: presenceStart.current,
+      });
+    };
+
+    update();
+
+    return usePlayerStore.subscribe((state, prev) => {
+      const trackChanged = state.currentTrack?.id !== prev.currentTrack?.id;
+      if (trackChanged) presenceStart.current = Math.floor(Date.now() / 1000);
+      if (trackChanged || state.isPlaying !== prev.isPlaying) update();
+    });
+  }, []);
+
   // Загрузка конфига при старте
   useEffect(() => {
     if (!window.electronAPI) return;
 
     window.electronAPI.getConfig().then((cfg) => {
-      // Восстанавливаем тему
-      const t = (cfg.theme as typeof theme) || "dark";
-      document.documentElement.setAttribute("data-theme", t);
-      useAppStore.setState({ theme: t });
-
-      // Громкость
-      usePlayerStore.getState().setVolume(cfg.volume ?? 0.8);
+      // Восстанавливаем тему (включая сохранённую кастомную)
+      const savedTheme = typeof cfg.theme === "string" && cfg.theme ? cfg.theme : "dark";
+      useAppStore.getState().setTheme(savedTheme);
     });
 
     // Восстанавливаем сохранённую сессию
@@ -247,9 +319,14 @@ export default function App() {
             </div>
           </div>
         )}
+
+        {lyricsVisible && <LyricsPanel />}
       </div>
 
       <Player />
+
+      {karaokeFullscreen && <KaraokeFullscreen />}
+      {settingsOpen && <SettingsModal />}
     </div>
   );
 }

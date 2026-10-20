@@ -1,13 +1,23 @@
 import { create } from "zustand";
 import { SCUser, SCTrack, SCPlaylist } from "../types/soundcloud";
+import {
+  CustomTheme,
+  applyTheme,
+  loadCustomThemes,
+  saveCustomThemes,
+  themeDataId,
+} from "../lib/themes";
 
-export type Theme = "dark" | "light" | "purple" | "green";
+export type Theme = string;
 export type View = "home" | "wave" | "search" | "library" | "likes" | "uploads" | "playlist" | "artist";
 
 interface AppState {
   // Тема
   theme: Theme;
+  customThemes: CustomTheme[];
   setTheme: (t: Theme) => void;
+  saveCustomTheme: (theme: CustomTheme) => void;
+  deleteCustomTheme: (id: string) => void;
 
   // Текущий вид
   view: View;
@@ -35,18 +45,59 @@ interface AppState {
   // Sidebar collapsed
   sidebarCollapsed: boolean;
   toggleSidebar: () => void;
+  setSidebarCollapsed: (value: boolean) => void;
+
+  // Панель настроек
+  settingsOpen: boolean;
+  openSettings: () => void;
+  closeSettings: () => void;
 
   // Queue panel
   queueVisible: boolean;
   toggleQueue: () => void;
+
+  // Панель текста песни
+  lyricsVisible: boolean;
+  toggleLyrics: () => void;
+  closeLyrics: () => void;
+
+  // Караоке на весь экран
+  karaokeFullscreen: boolean;
+  openKaraokeFullscreen: () => void;
+  closeKaraokeFullscreen: () => void;
+  toggleKaraokeFullscreen: () => void;
 }
 
-export const useAppStore = create<AppState>((set) => ({
+export const useAppStore = create<AppState>((set, get) => ({
   theme: "dark",
+  customThemes: loadCustomThemes(),
+
   setTheme: (theme) => {
-    document.documentElement.setAttribute("data-theme", theme);
+    applyTheme(theme, get().customThemes);
     window.electronAPI?.setTheme(theme);
     set({ theme });
+  },
+
+  saveCustomTheme: (theme) => {
+    const themes = get().customThemes;
+    const exists = themes.some((item) => item.id === theme.id);
+    const next = exists
+      ? themes.map((item) => (item.id === theme.id ? theme : item))
+      : [...themes, theme];
+
+    saveCustomThemes(next);
+    set({ customThemes: next });
+    get().setTheme(themeDataId(theme));
+  },
+
+  deleteCustomTheme: (id) => {
+    const next = get().customThemes.filter((theme) => theme.id !== id);
+    saveCustomThemes(next);
+    set({ customThemes: next });
+
+    if (get().theme === `custom:${id}`) {
+      get().setTheme("dark");
+    }
   },
 
   view: "home",
@@ -70,7 +121,24 @@ export const useAppStore = create<AppState>((set) => ({
 
   sidebarCollapsed: false,
   toggleSidebar: () => set((s) => ({ sidebarCollapsed: !s.sidebarCollapsed })),
+  setSidebarCollapsed: (sidebarCollapsed) => set({ sidebarCollapsed }),
+
+  settingsOpen: false,
+  openSettings: () => set({ settingsOpen: true }),
+  closeSettings: () => set({ settingsOpen: false }),
 
   queueVisible: false,
-  toggleQueue: () => set((s) => ({ queueVisible: !s.queueVisible })),
+  // Очередь и текст занимают одно и то же место справа,
+  // поэтому открытие одной панели закрывает другую.
+  toggleQueue: () => set((s) => ({ queueVisible: !s.queueVisible, lyricsVisible: false })),
+
+  lyricsVisible: false,
+  toggleLyrics: () => set((s) => ({ lyricsVisible: !s.lyricsVisible, queueVisible: false })),
+  closeLyrics: () => set({ lyricsVisible: false }),
+
+  karaokeFullscreen: false,
+  openKaraokeFullscreen: () => set({ karaokeFullscreen: true }),
+  closeKaraokeFullscreen: () => set({ karaokeFullscreen: false }),
+  toggleKaraokeFullscreen: () =>
+    set((s) => ({ karaokeFullscreen: !s.karaokeFullscreen })),
 }));
