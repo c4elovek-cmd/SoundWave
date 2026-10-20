@@ -229,7 +229,7 @@ export default function App() {
                       {t.title}
                     </span>
                     <span className="track-artist" style={{ fontSize: 11 }}>
-                      {t.user.username}
+                      {t.user?.username ?? "Неизвестный автор"}
                     </span>
                   </div>
                   <button

@@ -146,6 +146,28 @@ async function hasActiveSession(): Promise<boolean> {
 let tokenBeforeLogin: string | null = null;
 
 /**
+ * fetch с повторами для коротких сетевых сбоев.
+ *
+ * При старте приложения первые запросы к SoundCloud иногда падают
+ * с «fetch failed» (ECONNRESET при установке соединения) — один-два
+ * повтора это лечат, и главная не остаётся пустой.
+ */
+async function fetchWithRetry(url: string, init: RequestInit, attempts = 3): Promise<Response> {
+  let lastError: unknown;
+
+  for (let i = 0; i < attempts; i++) {
+    try {
+      return await fetch(url, init);
+    } catch (e) {
+      lastError = e;
+      if (i < attempts - 1) await new Promise((r) => setTimeout(r, 500 * (i + 1)));
+    }
+  }
+
+  throw lastError;
+}
+
+/**
  * Заголовки для запросов к SoundCloud из main-процесса.
  * Там нет CORS-ограничений, и Cookie можно передавать свободно.
  *
@@ -191,6 +213,12 @@ function createWindow() {
   mainWindow.once("ready-to-show", () => {
     mainWindow?.show();
     log.info("Главное окно показано");
+  });
+
+  // Если рендерер всё-таки упал, окно иначе останется чёрным без объяснений
+  mainWindow.webContents.on("render-process-gone", (_event, details) => {
+    log.error("Рендерер упал:", details.reason, details.exitCode);
+    if (mainWindow && !mainWindow.isDestroyed()) mainWindow.reload();
   });
 
   // Сворачивание в трей
@@ -589,7 +617,7 @@ function setupIPC() {  // Получить сохранённые настрой
         url.searchParams.set(key, String(value));
       }
 
-      const res = await fetch(url.toString(), { headers: await apiHeaders() });
+      const res = await fetchWithRetry(url.toString(), { headers: await apiHeaders() });
       const text = await res.text();
 
       if (!res.ok) {
@@ -613,7 +641,7 @@ function setupIPC() {  // Получить сохранённые настрой
     const id = await getClientId();
     const headers = await apiHeaders();
 
-    const trackRes = await fetch(`${API_V2}/tracks/${trackId}?client_id=${id}`, { headers });
+    const trackRes = await fetchWithRetry(`${API_V2}/tracks/${trackId}?client_id=${id}`, { headers });
     if (!trackRes.ok) throw new Error(`SoundCloud API вернул ошибку ${trackRes.status}`);
 
     const track = await trackRes.json();
@@ -636,7 +664,7 @@ function setupIPC() {  // Получить сохранённые настрой
     }
 
     const manifestUrl = `${chosen.url}${chosen.url.includes("?") ? "&" : "?"}client_id=${id}`;
-    const manifestRes = await fetch(manifestUrl, { headers });
+    const manifestRes = await fetchWithRetry(manifestUrl, { headers });
     if (!manifestRes.ok) throw new Error(`Поток недоступен (${manifestRes.status})`);
 
     const manifest = await manifestRes.json();

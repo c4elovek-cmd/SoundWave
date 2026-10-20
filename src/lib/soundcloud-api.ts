@@ -132,8 +132,17 @@ export const scApi = {
   },
 
   // Поиск треков
+  //
+  // SoundCloud подмешивает в выдачу `type=tracks` профили пользователей
+  // (`kind=user`): у них нет ни `title`, ни `user`, и рендер на них падал
+  // с «Cannot read properties of undefined (reading 'username')» —
+  // React размонтировал всё дерево, и окно становилось чёрным.
   async searchTracks(query: string, limit = 30) {
-    return this.search(query, "tracks", limit);
+    const res = (await this.search(query, "tracks", limit)) as import("../types/soundcloud").SCPaginatedResponse<any>;
+    const collection = (res.collection ?? []).filter(
+      (t: any) => t && (t.kind === undefined || t.kind === "track") && typeof t.id === "number" && t.title
+    );
+    return { ...res, collection } as typeof res;
   },
 
   // Поиск пользователей

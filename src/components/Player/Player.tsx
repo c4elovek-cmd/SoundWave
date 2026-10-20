@@ -140,8 +140,8 @@ export default function Player() {
           <span className="player-track-title" title={currentTrack.title}>
             {currentTrack.title}
           </span>
-          <span className="player-track-artist" title={currentTrack.user.username}>
-            {currentTrack.user.username}
+          <span className="player-track-artist" title={currentTrack.user?.username ?? ""}>
+            {currentTrack.user?.username ?? ""}
           </span>
           {error && (
             <span className="player-error" title={error}>

@@ -59,7 +59,13 @@ export default function SearchPage() {
     try {
       if (tab === "tracks") {
         const res = await scApi.searchTracks(q, 40);
-        setTracks((res as any).collection ?? []);
+        // В результатах SoundCloud иногда попадаются объекты без user
+        // (и без id) — такие строки рендерить нельзя
+        setTracks(
+          ((res as any).collection ?? []).filter(
+            (t: any) => t && typeof t.id === "number" && t.title
+          )
+        );
       } else if (tab === "artists") {
         const res = await scApi.searchUsers(q, 24);
         setArtists((res as any).collection ?? []);

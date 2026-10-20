@@ -70,7 +70,7 @@ export default function TrackRow({
             {track.title}
           </span>
           {showArtist && (
-            <span className="track-artist">{track.user.username}</span>
+            <span className="track-artist">{track.user?.username ?? "Неизвестный автор"}</span>
           )}
         </div>
       </div>
