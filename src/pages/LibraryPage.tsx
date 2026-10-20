@@ -14,7 +14,7 @@ interface Props {
 }
 
 export default function LibraryPage({ mode }: Props) {
-  const { isLoggedIn, setLikedTracks, setUploadedTracks } = useAppStore();
+  const { isLoggedIn, currentUser, setLikedTracks, setUploadedTracks } = useAppStore();
   const { play } = usePlayerStore();
   const [tracks, setTracks] = useState<SCTrack[]>([]);
   const [loading, setLoading] = useState(true);
@@ -30,8 +30,12 @@ export default function LibraryPage({ mode }: Props) {
     setLoading(true);
     setError(null);
     try {
+      // limit=100 — SoundCloud отдаёт максимум ~100 лайков за раз,
+      // а счётчик likes_count может быть больше (часть лайков API не отдаёт)
       const res =
-        mode === "likes" ? await scApi.getMyLikes(60) : await scApi.getMyTracks(60);
+        mode === "likes"
+          ? await scApi.getMyLikes(currentUser?.id, 100)
+          : await scApi.getMyTracks(currentUser?.id, 100);
       const items = (res as any).collection ?? [];
       const list: SCTrack[] = items.map((i: any) => i.track ?? i).filter(Boolean);
       setTracks(list);
@@ -57,7 +61,8 @@ export default function LibraryPage({ mode }: Props) {
       const items = res.collection ?? [];
       const list: SCTrack[] = items.map((i: any) => i.track ?? i).filter(Boolean);
       setTracks((prev) => [...prev, ...list]);
-      setNextHref(res.next_href ?? null);
+      // Пустая страница — значит, дальше треков нет
+      setNextHref(list.length > 0 ? res.next_href ?? null : null);
     } finally {
       setLoadingMore(false);
     }
@@ -99,6 +104,15 @@ export default function LibraryPage({ mode }: Props) {
           {subtitle}
           {tracks.length > 0 ? ` · ${tracks.length} треков` : ""}
         </div>
+        {/* SoundCloud считает лайки по-своему, но часть из них API не отдаёт */}
+        {mode === "likes" &&
+          currentUser?.likes_count != null &&
+          tracks.length > 0 &&
+          currentUser.likes_count > tracks.length && (
+            <div className="page-subtitle" style={{ opacity: 0.6, marginTop: 2 }}>
+              SoundCloud не отдаёт {currentUser.likes_count - tracks.length} скрытых лайков
+            </div>
+          )}
       </div>
 
       {loading && (

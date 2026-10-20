@@ -49,9 +49,9 @@ export default function Player() {
   useEffect(() => {
     if (!isPlaying) return;
     const tick = () => {
-      const { howl, duration: d } = usePlayerStore.getState();
-      if (howl && d > 0) {
-        const pos = howl.seek() as number;
+      const { audio, duration: d } = usePlayerStore.getState();
+      if (audio && d > 0) {
+        const pos = audio.currentTime;
         setProgress(pos / (d / 1000));
         setLocalProgress(pos / (d / 1000));
       }

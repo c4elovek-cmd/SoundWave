@@ -116,8 +116,41 @@ async function getCookieHeader(): Promise<string> {
 }
 
 /**
+ * OAuth-токен из cookies сессии.
+ *
+ * Важный нюанс: внутренний API SoundCloud (api-v2) принимает авторизацию
+ * только через заголовок `Authorization: OAuth <access_token>`.
+ * Одной cookie-шапки мало: `/me` отдаёт 401, а приватные коллекции — 404.
+ */
+async function getAccessToken(): Promise<string | null> {
+  try {
+    const ses = session.fromPartition(SC_PARTITION);
+    const cookies = await ses.cookies.get({ domain: ".soundcloud.com" });
+    return cookies.find((c) => c.name === "oauth_token")?.value ?? null;
+  } catch (e) {
+    log.warn("Не удалось прочитать access token", e);
+    return null;
+  }
+}
+
+/** Есть ли активная сессия SoundCloud (в разделе уже лежит access token). */
+async function hasActiveSession(): Promise<boolean> {
+  return Boolean(await getAccessToken());
+}
+
+/**
+ * Токен, который был в сессии до открытия настоящей страницы входа.
+ * Нужен, чтобы отличить успешный вход от мгновенного редиректа
+ * уже авторизованного пользователя (signin -> /discover).
+ */
+let tokenBeforeLogin: string | null = null;
+
+/**
  * Заголовки для запросов к SoundCloud из main-процесса.
  * Там нет CORS-ограничений, и Cookie можно передавать свободно.
+ *
+ * Плюс OAuth-токен: без него приватные коллекции пользователя
+ * (лайки, подписки, плейлисты) недоступны.
  */
 async function apiHeaders(): Promise<Record<string, string>> {
   const headers: Record<string, string> = {
@@ -125,6 +158,9 @@ async function apiHeaders(): Promise<Record<string, string>> {
     "User-Agent": BROWSER_UA,
     Referer: "https://soundcloud.com/",
   };
+
+  const token = await getAccessToken();
+  if (token) headers.Authorization = `OAuth ${token}`;
 
   const cookie = await getCookieHeader();
   if (cookie) headers.Cookie = cookie;
@@ -242,14 +278,6 @@ function createAuthWindow(hash = "/auth"): BrowserWindow {
   authWindow.webContents.on("did-navigate", onNavigate);
   authWindow.webContents.on("did-navigate-in-page", onNavigate);
 
-  // На странице SoundCloud показываем свои кнопки «Назад» и «Закрыть»
-  authWindow.webContents.on("did-finish-load", () => {
-    const win = authWindow;
-    if (!win || win.isDestroyed()) return;
-    const url = win.webContents.getURL();
-    if (/^https:\/\/(www\.)?soundcloud\.com\//i.test(url)) injectLoginHelpers(win);
-  });
-
   loadAppRoute(authWindow, hash);
   log.info("Окно входа создано");
 
@@ -260,6 +288,16 @@ function createAuthWindow(hash = "/auth"): BrowserWindow {
 async function handleLoginNavigation(url: string) {
   if (!/^https:\/\/(www\.)?soundcloud\.com\//i.test(url)) return;
   if (/\/(signin|signup|forgot-password|reset-password)/i.test(url)) return;
+
+  const tokenNow = await getAccessToken();
+
+  // Токен не изменился — это не вход, а редирект уже авторизованного
+  // пользователя (signin -> /discover). Окно не закрываем: даём выйти из
+  // аккаунта прямо на странице SoundCloud.
+  if (!tokenNow || tokenNow === tokenBeforeLogin) {
+    log.info("Сессия SoundCloud уже активна — ждём подтверждения входа");
+    return;
+  }
 
   // Даём SoundCloud время выставить cookies
   setTimeout(() => void finishLogin(), 900);
@@ -308,40 +346,14 @@ function navigateAuthWindow(hash: string) {
   return true;
 }
 
-/**
- * Подсказка поверх страницы SoundCloud: вернуться к выбору входа или закрыть окно.
- * На сторонней странице приложение отдаёт только эти две безобидные команды.
- */
-function injectLoginHelpers(win: BrowserWindow) {
-  win.webContents
-    .executeJavaScript(`(() => {
-      if (document.getElementById("sw-login-helpers")) return;
-      const box = document.createElement("div");
-      box.id = "sw-login-helpers";
-      box.style.cssText = "position:fixed;left:14px;bottom:14px;z-index:2147483647;display:flex;gap:8px;align-items:center;font:12px system-ui";
-
-      const back = document.createElement("button");
-      back.textContent = "← Назад";
-      back.title = "Вернуться к выбору способа входа";
-      back.style.cssText = "background:#ff5500;color:#fff;border:0;border-radius:10px;padding:9px 14px;cursor:pointer;font:600 12px system-ui";
-      back.addEventListener("click", () => { try { window.electronAPI.showAuthChoice(); } catch (e) {} });
-
-      const close = document.createElement("button");
-      close.textContent = "✕";
-      close.title = "Закрыть окно входа";
-      close.style.cssText = "background:#1a1a1a;color:#bbb;border:1px solid #3a3a3a;border-radius:10px;padding:9px 12px;cursor:pointer;font:12px system-ui";
-      close.addEventListener("click", () => { try { window.electronAPI.closeLoginWindow(); } catch (e) {} });
-
-      box.appendChild(back);
-      box.appendChild(close);
-      document.body.appendChild(box);
-    })();`)
-    .catch(() => {});
-}
-
 /** Открывает настоящую страницу входа SoundCloud в том же окне. */
-function startSoundCloudLogin() {
+async function startSoundCloudLogin() {
   const win = createAuthWindow("/auth");
+
+  // Запоминаем токен до входа: после успешного входа он изменится,
+  // а при редиректе уже авторизованного пользователя останется прежним.
+  tokenBeforeLogin = await getAccessToken();
+
   win.loadURL("https://soundcloud.com/signin");
   return true;
 }
@@ -584,7 +596,7 @@ function setupIPC() {  // Получить сохранённые настрой
         throw new Error(
           res.status === 401
             ? "SoundCloud требует входа в аккаунт"
-            : `SoundCloud API вернул ошибку ${res.status}`,
+            : `SoundCloud API вернул ошибку ${res.status} (${url.pathname})`,
         );
       }
 
@@ -605,12 +617,19 @@ function setupIPC() {  // Получить сохранённые настрой
     if (!trackRes.ok) throw new Error(`SoundCloud API вернул ошибку ${trackRes.status}`);
 
     const track = await trackRes.json();
-    const transcodings: Array<{ url: string; format?: { protocol?: string } }> =
-      track?.media?.transcodings ?? [];
+    const transcodings: Array<{
+      url: string;
+      format?: { protocol?: string; mime_type?: string };
+    }> = track?.media?.transcodings ?? [];
 
+    // SoundCloud отдаёт потоки в HLS. Выбираем fMP4 (audio/mp4) — такие
+    // сегменты MediaSource в Chromium понимает, а MPEG-TS (audio/mpegurl)
+    // через MSE не воспроизводится.
     const chosen =
       transcodings.find((t) => t.format?.protocol === "progressive") ??
-      transcodings.find((t) => t.format?.protocol === "hls");
+      transcodings.find((t) => (t.format?.mime_type ?? "").includes("mp4")) ??
+      transcodings.find((t) => t.format?.protocol === "hls") ??
+      transcodings[0];
 
     if (!chosen) {
       throw new Error("У трека нет доступных потоков");
@@ -725,6 +744,11 @@ function setupIPC() {  // Получить сохранённые настрой
   // Проверить статус входа
   ipcMain.handle("check-login", () => {
     return store.get("loggedIn");
+  });
+
+  // Есть ли живая сессия SoundCloud (нужна для экрана «Вы уже вошли»)
+  ipcMain.handle("has-session", async () => {
+    return hasActiveSession();
   });
 
   // Выход: чистим cookies именно нашего раздела сессии

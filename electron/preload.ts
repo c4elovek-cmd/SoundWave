@@ -9,6 +9,62 @@ if (isExternalPage) {
     showAuthChoice: () => ipcRenderer.invoke("show-auth-choice"),
     closeLoginWindow: () => ipcRenderer.invoke("close-login-window"),
   });
+
+  // Кнопки «Назад» и «Закрыть» рисуем прямо отсюда. Раньше это делал
+  // main-процесс через webContents.executeJavaScript, но на тяжёлых
+  // SPA-страницах SoundCloud тот промис так и не резолвился — кнопок
+  // на экране не появлялось. Preload выполняется сразу при загрузке
+  // документа, поэтому кнопки всегда успевают нарисоваться.
+  const mountHelpers = () => {
+    if (!document.body || document.getElementById("sw-login-helpers")) return;
+
+    const box = document.createElement("div");
+    box.id = "sw-login-helpers";
+    box.style.cssText =
+      "position:fixed;left:14px;bottom:14px;z-index:2147483647;display:flex;gap:8px;align-items:center;font:12px system-ui";
+
+    const back = document.createElement("button");
+    back.textContent = "← Назад";
+    back.title = "Вернуться к выбору способа входа";
+    back.style.cssText =
+      "background:#ff5500;color:#fff;border:0;border-radius:10px;padding:9px 14px;cursor:pointer;font:600 12px system-ui";
+    // В изолированном мире window.electronAPI недоступен — зовём IPC напрямую
+    back.addEventListener("click", () => void ipcRenderer.invoke("show-auth-choice"));
+
+    const close = document.createElement("button");
+    close.textContent = "✕";
+    close.title = "Закрыть окно входа";
+    close.style.cssText =
+      "background:#1a1a1a;color:#bbb;border:1px solid #3a3a3a;border-radius:10px;padding:9px 12px;cursor:pointer;font:12px system-ui";
+    close.addEventListener("click", () => void ipcRenderer.invoke("close-login-window"));
+
+    box.appendChild(back);
+    box.appendChild(close);
+    document.body.appendChild(box);
+  };
+
+  const startHelpers = () => {
+    mountHelpers();
+
+    // SPA перерисовывает страницу и может убрать наши кнопки —
+    // наблюдатель возвращает их на место.
+    const observer = new MutationObserver(() => {
+      if (!document.getElementById("sw-login-helpers")) mountHelpers();
+    });
+    observer.observe(document.documentElement, { childList: true, subtree: true });
+
+    // Страховка: если разметка перестроилась целиком
+    const timer = window.setInterval(() => {
+      if (!document.getElementById("sw-login-helpers")) mountHelpers();
+    }, 1500);
+    window.setTimeout(() => window.clearInterval(timer), 120_000);
+  };
+
+  if (document.readyState === "loading") {
+    document.addEventListener("DOMContentLoaded", startHelpers, { once: true });
+  } else {
+    startHelpers();
+  }
 } else {
   // Пробрасываем безопасные API в рендерер
   contextBridge.exposeInMainWorld("electronAPI", {
@@ -27,6 +83,7 @@ if (isExternalPage) {
     dumpSessionCookies: () => ipcRenderer.invoke("dump-session-cookies"),
     restoreSession: () => ipcRenderer.invoke("restore-session"),
     checkLogin: () => ipcRenderer.invoke("check-login"),
+    hasSession: () => ipcRenderer.invoke("has-session"),
     logout: () => ipcRenderer.invoke("logout"),
 
     // Внутренний API SoundCloud — запросы идут через main-процесс

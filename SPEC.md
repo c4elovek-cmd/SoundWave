@@ -198,7 +198,7 @@
 - **Frontend:** React 18 + TypeScript + Vite
 - **Styling:** CSS Modules + CSS Variables (для тем)
 - **State:** Zustand (простой, быстрый)
-- **Audio:** Howler.js (кроссбраузерный аудио)
+- **Audio:** HTML5 `<audio>` + hls.js (для HLS-манифестов, которых Chromium не играет нативно)
 - **HTTP:** Axios для запросов к SC API
 
 ### Структура проекта
@@ -243,24 +243,27 @@ src/
 
 ### SoundCloud API (internal)
 
-Приложение использует internal API веб-версии SoundCloud. Запросы перехватываются через DevTools или через анализ трафика.
+Приложение использует internal API веб-версии SoundCloud (`api-v2.soundcloud.com`). Запросы идут из main-процесса Electron: только там можно передать заголовки `Cookie` и `Authorization: OAuth <oauth_token>`, которые требует api-v2 для приватных коллекций.
 
 **Основные endpoints:**
 ```
 GET    /me                                     # Профиль
-GET    /me/tracks                              # Мои треки
-GET    /me/likes                               # Лайки
-GET    /me/followings                          # Подписки
-GET    /me/playlists                           # Плейлисты
-GET    /users/{id}/tracks                      # Треки пользователя
+GET    /users/{id}/tracks                       # Мои треки
+GET    /users/{id}/likes                        # Лайки
+GET    /users/{id}/followings                   # Подписки
+GET    /users/{id}/playlists                    # Плейлисты
+GET    /users/{id}                             # Профиль пользователя
 GET    /tracks/{id}                            # Информация о треке (media.transcodings)
 GET    /charts?kind=trending&genre=...         # Популярное (без входа)
 GET    /search?q=...&type=tracks|users|playlists # Поиск
 GET    /playlists/{id}                         # Плейлист
 ```
 
+> Путей вида `/me/likes` в api-v2 нет — они отдают 404. Приватные коллекции доступны только по `/users/{id}/...`.
+
 **Stream URL:** `/tracks/{id}` отдаёт `media.transcodings`; запрос манифеста
 (`.../stream/progressive?client_id=…`) возвращает подписанный URL файла на CDN — он играется напрямую.
+Часть треков SoundCloud отдаёт только в HLS (`audio/mp4; codecs="mp4a.40.2"`) — такие потоки играются через `hls.js` (MSE).
 
 ### Хранение данных
 

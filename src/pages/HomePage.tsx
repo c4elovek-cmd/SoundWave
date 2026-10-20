@@ -43,10 +43,11 @@ export default function HomePage() {
     setLoading(true);
     setError(null);
     try {
+      const userId = currentUser?.id;
       const results = await Promise.allSettled([
-        scApi.getMyLikes(20),
-        scApi.getMyFollowings(12),
-        scApi.getMyPlaylists(10),
+        scApi.getMyLikes(userId, 20),
+        scApi.getMyFollowings(userId, 12),
+        scApi.getMyPlaylists(userId, 10),
       ]);
 
       if (results[0].status === "fulfilled") {

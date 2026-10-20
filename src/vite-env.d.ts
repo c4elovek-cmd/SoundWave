@@ -19,6 +19,7 @@ declare global {
       dumpSessionCookies: () => Promise<string>;
       restoreSession: () => Promise<{ loggedIn: boolean; cookies: string }>;
       checkLogin: () => Promise<boolean>;
+      hasSession: () => Promise<boolean>;
       logout: () => Promise<boolean>;
       scRequest: (
         path: string,

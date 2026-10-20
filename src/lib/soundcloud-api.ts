@@ -21,6 +21,9 @@ export function getAuthCookies(): string | null {
   return scCookies;
 }
 
+// ID текущего пользователя: нужен для приватных коллекций
+let currentUserId: number | null = null;
+
 /**
  * Запрос к внутреннему API SoundCloud через main-процесс.
  * Путь может быть относительным ("/search") или абсолютным (next_href).
@@ -36,6 +39,17 @@ async function apiRequest<T>(
   return window.electronAPI.scRequest(path, params) as Promise<T>;
 }
 
+/**
+ * ID пользователя, под которым мы вошли.
+ * В api-v2 приватные коллекции лежат по пути /users/{id}/..., а не /me/...
+ */
+async function myId(): Promise<number> {
+  if (currentUserId) return currentUserId;
+  const me = await apiRequest<import("../types/soundcloud").SCUser>("/me");
+  currentUserId = me.id;
+  return me.id;
+}
+
 // ———————————————————————————————————————————————
 // Endpoints
 // ———————————————————————————————————————————————
@@ -47,23 +61,39 @@ export const scApi = {
   },
 
   // Треки текущего пользователя (загрузки)
-  async getMyTracks(limit = 50): Promise<import("../types/soundcloud").SCPaginatedResponse<import("../types/soundcloud").SCTrack>> {
-    return apiRequest("/me/tracks", { limit });
+  async getMyTracks(
+    userId?: number,
+    limit = 50
+  ): Promise<import("../types/soundcloud").SCPaginatedResponse<import("../types/soundcloud").SCTrack>> {
+    const id = userId ?? (await myId());
+    return apiRequest(`/users/${id}/tracks`, { limit });
   },
 
   // Лайкнутые треки
-  async getMyLikes(limit = 50): Promise<import("../types/soundcloud").SCPaginatedResponse<import("../types/soundcloud").SCTrack>> {
-    return apiRequest("/me/likes", { limit });
+  async getMyLikes(
+    userId?: number,
+    limit = 50
+  ): Promise<import("../types/soundcloud").SCPaginatedResponse<import("../types/soundcloud").SCTrack>> {
+    const id = userId ?? (await myId());
+    return apiRequest(`/users/${id}/likes`, { limit });
   },
 
   // Плейлисты текущего пользователя
-  async getMyPlaylists(limit = 50): Promise<import("../types/soundcloud").SCPaginatedResponse<import("../types/soundcloud").SCPlaylist>> {
-    return apiRequest("/me/playlists", { limit });
+  async getMyPlaylists(
+    userId?: number,
+    limit = 50
+  ): Promise<import("../types/soundcloud").SCPaginatedResponse<import("../types/soundcloud").SCPlaylist>> {
+    const id = userId ?? (await myId());
+    return apiRequest(`/users/${id}/playlists`, { limit });
   },
 
   // Подписки (артисты)
-  async getMyFollowings(limit = 50): Promise<import("../types/soundcloud").SCPaginatedResponse<import("../types/soundcloud").SCUser>> {
-    return apiRequest("/me/followings", { limit });
+  async getMyFollowings(
+    userId?: number,
+    limit = 50
+  ): Promise<import("../types/soundcloud").SCPaginatedResponse<import("../types/soundcloud").SCUser>> {
+    const id = userId ?? (await myId());
+    return apiRequest(`/users/${id}/followings`, { limit });
   },
 
   // Треки пользователя
@@ -82,12 +112,14 @@ export const scApi = {
   },
 
   // Прямая ссылка на аудиофайл трека
-  async getStreamUrl(trackId: number): Promise<string> {
+  async getStreamUrl(trackId: number): Promise<{ url: string; protocol: string }> {
     if (!window.electronAPI?.resolveStream) {
       throw new Error("Воспроизведение доступно только в десктопном приложении");
     }
-    const res = await window.electronAPI.resolveStream(trackId);
-    return res.url;
+    return window.electronAPI.resolveStream(trackId) as Promise<{
+      url: string;
+      protocol: string;
+    }>;
   },
 
   // Поиск

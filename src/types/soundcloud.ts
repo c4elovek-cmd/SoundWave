@@ -9,6 +9,7 @@ export interface SCUser {
   following_count?: number;
   playlist_count?: number;
   track_count?: number;
+  likes_count?: number;
 }
 
 export interface SCTrack {
