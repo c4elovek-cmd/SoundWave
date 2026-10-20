@@ -38,6 +38,100 @@ let isQuitting = false;
 const DIST = path.join(__dirname, "../dist");
 const VITE_DEV_SERVER_URL = process.env.VITE_DEV_SERVER_URL;
 
+// Раздел сессии, где живут cookies SoundCloud.
+// Главное окно и окно входа используют один и тот же раздел — поэтому
+// вход, сделанный в окне входа, сразу виден главному окну.
+const SC_PARTITION = "persist:soundcloud";
+
+// Внутренний API веб-версии SoundCloud
+const API_V2 = "https://api-v2.soundcloud.com";
+
+// SoundCloud отдаёт 401 на запросы без нормального User-Agent
+const BROWSER_UA =
+  "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/126.0.0.0 Safari/537.36";
+
+/**
+ * client_id SoundCloud — публичный идентификатор веб-клиента.
+ * Он периодически меняется, поэтому вытаскиваем его из JS-бандлов soundcloud.com
+ * и кешируем на время работы приложения.
+ */
+let clientId: string | null = null;
+let clientIdPromise: Promise<string> | null = null;
+
+async function getClientId(): Promise<string> {
+  if (clientId) return clientId;
+
+  if (!clientIdPromise) {
+    clientIdPromise = (async () => {
+      const html = await fetch("https://soundcloud.com/", {
+        headers: { "User-Agent": BROWSER_UA },
+      }).then((r) => r.text());
+
+      const scripts = [...html.matchAll(/src="([^"]+\.js)"/g)].map((m) => m[1]);
+
+      for (const src of scripts.slice(0, 15)) {
+        try {
+          const js = await fetch(src, { headers: { "User-Agent": BROWSER_UA } }).then((r) => r.text());
+          const match =
+            js.match(/"client_id":"([A-Za-z0-9]{32})"/) ||
+            js.match(/client_id[=:]"?([A-Za-z0-9]{32})"/) ||
+            js.match(/"client_id":"([^"]{8,64})"/);
+          if (match) {
+            clientId = match[1];
+            log.info(`client_id SoundCloud получен`);
+            return clientId;
+          }
+        } catch {
+          continue;
+        }
+      }
+
+      const inHtml = html.match(/"client_id":"([A-Za-z0-9]{32})"/);
+      if (inHtml) {
+        clientId = inHtml[1];
+        return clientId;
+      }
+
+      throw new Error("Не удалось получить client_id SoundCloud");
+    })().catch((e) => {
+      clientIdPromise = null;
+      throw e;
+    });
+  }
+
+  return clientIdPromise;
+}
+
+/** Текущие cookies сессии SoundCloud одной строкой — для заголовка Cookie. */
+async function getCookieHeader(): Promise<string> {
+  try {
+    const ses = session.fromPartition(SC_PARTITION);
+    const cookies = await ses.cookies.get({ domain: ".soundcloud.com" });
+    if (!cookies.length) return "";
+    return cookies.map((c) => `${c.name}=${c.value}`).join("; ");
+  } catch (e) {
+    log.warn("Не удалось прочитать cookies сессии", e);
+    return "";
+  }
+}
+
+/**
+ * Заголовки для запросов к SoundCloud из main-процесса.
+ * Там нет CORS-ограничений, и Cookie можно передавать свободно.
+ */
+async function apiHeaders(): Promise<Record<string, string>> {
+  const headers: Record<string, string> = {
+    Accept: "application/json",
+    "User-Agent": BROWSER_UA,
+    Referer: "https://soundcloud.com/",
+  };
+
+  const cookie = await getCookieHeader();
+  if (cookie) headers.Cookie = cookie;
+
+  return headers;
+}
+
 function createWindow() {
   const bounds = store.get("windowBounds") as { width: number; height: number };
 
@@ -54,7 +148,7 @@ function createWindow() {
       contextIsolation: true,
       nodeIntegration: false,
       webSecurity: true,
-      partition: "persist:soundcloud",
+      partition: SC_PARTITION,
     },
   });
 
@@ -91,157 +185,165 @@ function createWindow() {
 }
 
 /**
- * Открывает окно входа с настоящей страницей SoundCloud.
- * Пароль вводится на soundcloud.com и не проходит через приложение.
- * Когда SoundCloud перебрасывает пользователя со /login на /discover (успешный вход),
- * мы забираем cookie сессии и передаём их в главное окно.
+ * Окно входа — единственное дополнительное окно приложения (вместе с главным).
+ *
+ * Внутри него два пути, и оба живут в этом же окне:
+ *  1) настоящая страница soundcloud.com/signin — пароль вводится на самом SoundCloud;
+ *  2) ручной импорт cookies из браузера.
+ *
+ * Никаких третьих окон приложение не создаёт.
  */
-function openRealLoginWindow(parent: BrowserWindow | null) {
-  const loginWin = new BrowserWindow({
-    width: 520,
-    height: 760,
-    title: "Вход в SoundCloud",
-    backgroundColor: "#121212",
-    parent: parent || undefined,
-    modal: Boolean(parent),
-    show: false,
-    webPreferences: {
-      contextIsolation: true,
-      nodeIntegration: false,
-      partition: "persist:soundcloud",
-    },
-  });
 
-  loginWin.once("ready-to-show", () => loginWin.show());
-  loginWin.loadURL("https://soundcloud.com/signin");
-
-  let handled = false;
-
-  const finishLogin = async () => {
-    if (handled) return;
-    handled = true;
-    try {
-      const cookies = await loginWin.webContents.session.cookies.get({
-        domain: ".soundcloud.com",
-      });
-      const cookieHeader = cookies.map((c) => `${c.name}=${c.value}`).join("; ");
-      const hasAuth = cookies.some(
-        (c) => c.name === "oauth_token" || c.name === "SC_REF" || c.name.indexOf("oauth") === 0,
-      );
-
-      if (!cookieHeader) {
-        handled = false;
-        return;
-      }
-
-      store.set("scCookies", cookieHeader);
-      store.set("loggedIn", true);
-      mainWindow?.webContents.send("auth-success", cookieHeader);
-      log.info(`Вход выполнен, cookies получены (auth=${hasAuth})`);
-      loginWin.close();
-      mainWindow?.show();
-      mainWindow?.focus();
-    } catch (e) {
-      log.error("Не удалось забрать cookies", e);
-      handled = false;
-    }
-  };
-
-  // SoundCloud после входа редиректит на /discover, /stream или /you
-  loginWin.webContents.on("did-navigate", (_event, url) => {
-    log.info(`Auth navigate: ${url}`);
-    if (
-      /soundcloud\.com\/(discover|stream|you|feed)/.test(url) &&
-      !/\/signin/.test(url)
-    ) {
-      setTimeout(finishLogin, 800);
-    }
-  });
-
-  loginWin.webContents.on("did-navigate-in-page", (_event, url) => {
-    if (/soundcloud\.com\/(discover|stream|you|feed)/.test(url)) {
-      setTimeout(finishLogin, 800);
-    }
-  });
-
-  loginWin.on("closed", () => {
-    log.info("Окно входа закрыто");
-  });
-
-  return loginWin;
+/** Загружает в окно наш собственный интерфейс по маршруту (hash). */
+function loadAppRoute(win: BrowserWindow, hash: string) {
+  if (VITE_DEV_SERVER_URL) {
+    win.loadURL(`${VITE_DEV_SERVER_URL}#${hash}`);
+  } else {
+    win.loadFile(path.join(DIST, "index.html"), { hash });
+  }
 }
 
-function createAuthWindow() {
+/** Создаёт окно входа (или возвращает уже открытое). */
+function createAuthWindow(hash = "/auth"): BrowserWindow {
+  if (authWindow && !authWindow.isDestroyed()) {
+    authWindow.focus();
+    return authWindow;
+  }
+
   authWindow = new BrowserWindow({
-    width: 500,
+    width: 520,
     height: 700,
     title: "SoundWave — Вход в SoundCloud",
     backgroundColor: "#121212",
     parent: mainWindow || undefined,
-    modal: true,
+    modal: Boolean(mainWindow),
     show: false,
     resizable: false,
     webPreferences: {
       preload: path.join(__dirname, "preload.cjs"),
       contextIsolation: true,
       nodeIntegration: false,
-    },
-  });
-
-  authWindow.once("ready-to-show", () => {
-    authWindow?.show();
-  });
-
-  authWindow.on("closed", () => {
-    authWindow = null;
-  });
-
-  if (VITE_DEV_SERVER_URL) {
-    authWindow.loadURL(`${VITE_DEV_SERVER_URL}#/auth`);
-  } else {
-    authWindow.loadFile(path.join(DIST, "index.html"), {
-      hash: "/auth",
-    });
-  }
-
-  log.info("Окно авторизации создано");
-}
-
-/**
- * Окно ручного импорта cookies.
- * Пользователь открывает soundcloud.com у себя в браузере (или через расширение
- * вроде EditThisCookie / Cookie-Editor), копирует cookie-строку и вставляет сюда.
- */
-function createManualAuthWindow() {
-  if (authWindow) {
-    authWindow.focus();
-    return;
-  }
-  authWindow = new BrowserWindow({
-    width: 520,
-    height: 640,
-    title: "SoundWave — Ручной вход",
-    backgroundColor: "#121212",
-    parent: mainWindow || undefined,
-    modal: true,
-    show: false,
-    webPreferences: {
-      preload: path.join(__dirname, "preload.cjs"),
-      contextIsolation: true,
-      nodeIntegration: false,
+      // Общий с главным окном раздел сессии: вход виден обоим сразу
+      partition: SC_PARTITION,
     },
   });
 
   authWindow.once("ready-to-show", () => authWindow?.show());
   authWindow.on("closed", () => {
+    log.info("Окно входа закрыто");
     authWindow = null;
   });
 
-  if (VITE_DEV_SERVER_URL) {
-    authWindow.loadURL(`${VITE_DEV_SERVER_URL}#/auth/manual`);
-  } else {
-    authWindow.loadFile(path.join(DIST, "index.html"), { hash: "/auth/manual" });
+  // После успешного входа SoundCloud уводит на /discover, /you или /
+  // В этот момент забираем cookies сессии.
+  const onNavigate = (_event: Electron.Event, url: string) => {
+    void handleLoginNavigation(url);
+  };
+  authWindow.webContents.on("did-navigate", onNavigate);
+  authWindow.webContents.on("did-navigate-in-page", onNavigate);
+
+  // На странице SoundCloud показываем свои кнопки «Назад» и «Закрыть»
+  authWindow.webContents.on("did-finish-load", () => {
+    const win = authWindow;
+    if (!win || win.isDestroyed()) return;
+    const url = win.webContents.getURL();
+    if (/^https:\/\/(www\.)?soundcloud\.com\//i.test(url)) injectLoginHelpers(win);
+  });
+
+  loadAppRoute(authWindow, hash);
+  log.info("Окно входа создано");
+
+  return authWindow;
+}
+
+/** Пользователь ушёл со страницы входа — значит вход выполнен. */
+async function handleLoginNavigation(url: string) {
+  if (!/^https:\/\/(www\.)?soundcloud\.com\//i.test(url)) return;
+  if (/\/(signin|signup|forgot-password|reset-password)/i.test(url)) return;
+
+  // Даём SoundCloud время выставить cookies
+  setTimeout(() => void finishLogin(), 900);
+}
+
+/** Забирает cookies сессии и сообщает главному окну об успешном входе. */
+async function finishLogin() {
+  if (!authWindow || authWindow.isDestroyed()) return;
+
+  const ses = session.fromPartition(SC_PARTITION);
+  const cookies = await ses.cookies.get({ domain: ".soundcloud.com" });
+  const hasToken = cookies.some((c) => c.name === "oauth_token");
+
+  if (!hasToken) {
+    log.info("Вход пока не подтверждён — ждём cookies");
+    return;
   }
+
+  const cookieHeader = cookies.map((c) => `${c.name}=${c.value}`).join("; ");
+  store.set("scCookies", cookieHeader);
+  store.set("loggedIn", true);
+
+  mainWindow?.webContents.send("auth-success", cookieHeader);
+  authWindow.close();
+  authWindow = null;
+  mainWindow?.show();
+  mainWindow?.focus();
+  log.info("Вход выполнен, cookies сессии получены");
+}
+
+/** Переключает окно входа на наш собственный маршрут (hash). */
+function navigateAuthWindow(hash: string) {
+  const win = createAuthWindow(hash);
+  const current = win.webContents.getURL();
+  const isOurApp =
+    current.startsWith("file://") || (VITE_DEV_SERVER_URL ? current.startsWith(VITE_DEV_SERVER_URL) : false);
+
+  if (isOurApp) {
+    win.webContents
+      .executeJavaScript(`window.location.hash = ${JSON.stringify(hash)}`)
+      .catch(() => loadAppRoute(win, hash));
+  } else {
+    loadAppRoute(win, hash);
+  }
+
+  return true;
+}
+
+/**
+ * Подсказка поверх страницы SoundCloud: вернуться к выбору входа или закрыть окно.
+ * На сторонней странице приложение отдаёт только эти две безобидные команды.
+ */
+function injectLoginHelpers(win: BrowserWindow) {
+  win.webContents
+    .executeJavaScript(`(() => {
+      if (document.getElementById("sw-login-helpers")) return;
+      const box = document.createElement("div");
+      box.id = "sw-login-helpers";
+      box.style.cssText = "position:fixed;left:14px;bottom:14px;z-index:2147483647;display:flex;gap:8px;align-items:center;font:12px system-ui";
+
+      const back = document.createElement("button");
+      back.textContent = "← Назад";
+      back.title = "Вернуться к выбору способа входа";
+      back.style.cssText = "background:#ff5500;color:#fff;border:0;border-radius:10px;padding:9px 14px;cursor:pointer;font:600 12px system-ui";
+      back.addEventListener("click", () => { try { window.electronAPI.showAuthChoice(); } catch (e) {} });
+
+      const close = document.createElement("button");
+      close.textContent = "✕";
+      close.title = "Закрыть окно входа";
+      close.style.cssText = "background:#1a1a1a;color:#bbb;border:1px solid #3a3a3a;border-radius:10px;padding:9px 12px;cursor:pointer;font:12px system-ui";
+      close.addEventListener("click", () => { try { window.electronAPI.closeLoginWindow(); } catch (e) {} });
+
+      box.appendChild(back);
+      box.appendChild(close);
+      document.body.appendChild(box);
+    })();`)
+    .catch(() => {});
+}
+
+/** Открывает настоящую страницу входа SoundCloud в том же окне. */
+function startSoundCloudLogin() {
+  const win = createAuthWindow("/auth");
+  win.loadURL("https://soundcloud.com/signin");
+  return true;
 }
 
 function createTray() {
@@ -427,78 +529,195 @@ function setupIPC() {  // Получить сохранённые настрой
     return true;
   });
 
-  // Открыть окно авторизации
+  // Окно входа — единственное дополнительное окно приложения
   ipcMain.handle("open-auth-window", () => {
-    if (!authWindow) {
-      createAuthWindow();
-    } else {
-      authWindow.focus();
-    }
-    return true;
+    return navigateAuthWindow("/auth");
   });
 
-  // Закрыть окно авторизации и сообщить результат
-  ipcMain.handle("close-auth-window", (_event, cookies: string) => {
-    // Специальный сигнал: пользователь хочет открыть настоящую страницу SoundCloud
-    if (cookies === "open-real-login") {
-      authWindow?.close();
-      authWindow = null;
-      openRealLoginWindow(mainWindow);
-      return true;
-    }
+  // Вход через настоящую страницу soundcloud.com/signin (в том же окне)
+  ipcMain.handle("open-real-login", () => {
+    return startSoundCloudLogin();
+  });
 
-    store.set("scCookies", cookies);
-    store.set("loggedIn", true);
+  // Ручной вход: тот же экран, но во вкладке с вводом cookies
+  ipcMain.handle("open-manual-login", () => {
+    return navigateAuthWindow("/auth/manual");
+  });
+
+  // Вернуться к выбору способа входа (из страницы SoundCloud)
+  ipcMain.handle("show-auth-choice", () => {
+    log.info("IPC: show-auth-choice");
+    return navigateAuthWindow("/auth");
+  });
+
+  // Закрыть окно входа
+  ipcMain.handle("close-login-window", () => {
+    log.info("IPC: close-login-window");
     authWindow?.close();
     authWindow = null;
-    mainWindow?.webContents.send("auth-success", cookies);
-    log.info("Авторизация завершена");
     return true;
   });
 
-  // Прямой вход: сразу открыть настоящую страницу SoundCloud
-  ipcMain.handle("open-real-login", () => {
-    openRealLoginWindow(mainWindow);
-    return true;
-  });
+  /**
+   * Прокси к внутреннему API SoundCloud.
+   * Запросы идут из main-процесса: там нет CORS-ограничений и можно передать Cookie,
+   * который браузер в renderer обрезает как запрещённый заголовок.
+   */
+  ipcMain.handle(
+    "sc-request",
+    async (_event, path: string, params: Record<string, string | number> = {}) => {
+      const id = await getClientId();
 
-  // Ручной вход: окно для вставки cookie-строки
-  ipcMain.handle("open-manual-login", () => {
-    createManualAuthWindow();
-    return true;
-  });
+      const url = path.startsWith("http")
+        ? new URL(path)
+        : new URL(`${API_V2}${path.startsWith("/") ? path : `/${path}`}`);
 
-  // Текущий session cookie главного окна (чтобы показать, что реально есть)
-  ipcMain.handle("dump-session-cookies", async () => {
-    const ses = mainWindow?.webContents.session ?? session.defaultSession;
-    const cookies = await ses.cookies.get({ domain: ".soundcloud.com" });
-    if (!cookies.length) return "";
-    return cookies.map((c) => `${c.name}=${c.value}`).join("; ");
-  });
+      if (!url.searchParams.has("client_id")) url.searchParams.set("client_id", id);
+      for (const [key, value] of Object.entries(params ?? {})) {
+        url.searchParams.set(key, String(value));
+      }
 
-  // После рестарта — отдать сохранённые cookies в рендерер
-  ipcMain.handle("restore-session", () => {
-    const cookies = store.get("scCookies") as string | null;
-    const loggedIn = store.get("loggedIn") as boolean;
-    if (loggedIn && cookies) {
-      mainWindow?.webContents.send("auth-success", cookies);
+      const res = await fetch(url.toString(), { headers: await apiHeaders() });
+      const text = await res.text();
+
+      if (!res.ok) {
+        throw new Error(
+          res.status === 401
+            ? "SoundCloud требует входа в аккаунт"
+            : `SoundCloud API вернул ошибку ${res.status}`,
+        );
+      }
+
+      try {
+        return JSON.parse(text);
+      } catch {
+        return text;
+      }
+    },
+  );
+
+  // Прямая ссылка на аудио: трек -> манифест -> файл на CDN
+  ipcMain.handle("sc-resolve-stream", async (_event, trackId: number) => {
+    const id = await getClientId();
+    const headers = await apiHeaders();
+
+    const trackRes = await fetch(`${API_V2}/tracks/${trackId}?client_id=${id}`, { headers });
+    if (!trackRes.ok) throw new Error(`SoundCloud API вернул ошибку ${trackRes.status}`);
+
+    const track = await trackRes.json();
+    const transcodings: Array<{ url: string; format?: { protocol?: string } }> =
+      track?.media?.transcodings ?? [];
+
+    const chosen =
+      transcodings.find((t) => t.format?.protocol === "progressive") ??
+      transcodings.find((t) => t.format?.protocol === "hls");
+
+    if (!chosen) {
+      throw new Error("У трека нет доступных потоков");
     }
-    return { loggedIn, cookies: cookies || "" };
+
+    const manifestUrl = `${chosen.url}${chosen.url.includes("?") ? "&" : "?"}client_id=${id}`;
+    const manifestRes = await fetch(manifestUrl, { headers });
+    if (!manifestRes.ok) throw new Error(`Поток недоступен (${manifestRes.status})`);
+
+    const manifest = await manifestRes.json();
+    if (!manifest?.url) throw new Error("SoundCloud не вернул ссылку на аудио");
+
+    return {
+      url: manifest.url,
+      protocol: chosen.format?.protocol ?? "progressive",
+      duration: track.duration ?? 0,
+    };
+  });
+
+  // client_id — нужен рендереру для построения ссылок
+  ipcMain.handle("get-client-id", () => getClientId());
+
+  // Текущие cookies сессии (чтобы показать, что реально есть)
+  ipcMain.handle("dump-session-cookies", async () => {
+    return getCookieHeader();
+  });
+
+  // После рестарта — проверяем, жила ли сессия в разделе persist:soundcloud
+  ipcMain.handle("restore-session", async () => {
+    const cookies = await session.fromPartition(SC_PARTITION).cookies.get({ domain: ".soundcloud.com" });
+    const hasToken = cookies.some((c) => c.name === "oauth_token");
+    const cookieHeader = cookies.map((c) => `${c.name}=${c.value}`).join("; ");
+
+    const loggedIn = hasToken && Boolean(cookieHeader);
+
+    if (loggedIn) {
+      store.set("loggedIn", true);
+      store.set("scCookies", cookieHeader);
+      mainWindow?.webContents.send("auth-success", cookieHeader);
+    } else {
+      store.set("loggedIn", false);
+      store.set("scCookies", null);
+    }
+
+    return { loggedIn, cookies: loggedIn ? cookieHeader : "" };
   });
 
   // Ручной импорт cookies: строка вида "key=value; key2=value2" или JSON-экспорт
-  ipcMain.handle("import-cookies", (_event, raw: string) => {
+  ipcMain.handle("import-cookies", async (_event, raw: string) => {
     const parsed = parseCookieInput(raw);
     if (!parsed) {
       return { ok: false, error: "Не удалось распознать cookies" };
     }
-    store.set("scCookies", parsed.cookieHeader);
+
+    const ses = session.fromPartition(SC_PARTITION);
+    const pairs = parsed.cookieHeader
+      .split(";")
+      .map((p) => p.trim())
+      .filter((p) => p.includes("="));
+
+    let count = 0;
+    for (const pair of pairs) {
+      const idx = pair.indexOf("=");
+      const name = pair.slice(0, idx).trim();
+      const value = pair.slice(idx + 1).trim();
+      if (!name) continue;
+
+      try {
+        await ses.cookies.set({
+          url: "https://soundcloud.com",
+          name,
+          value,
+          domain: ".soundcloud.com",
+          path: "/",
+          secure: true,
+          sameSite: "no_restriction",
+          expirationDate: Math.floor(Date.now() / 1000) + 60 * 60 * 24 * 30,
+        });
+        count++;
+      } catch (e) {
+        log.warn(`Cookie ${name} не записан`, e);
+      }
+    }
+
+    if (!count) {
+      return { ok: false, error: "Cookies не удалось записать в сессию" };
+    }
+
+    // Проверяем, что SoundCloud принял сессию
+    try {
+      const id = await getClientId();
+      const check = await fetch(`${API_V2}/me?client_id=${id}`, { headers: await apiHeaders() });
+      if (check.status === 401) {
+        return { ok: false, error: "SoundCloud не принял эти cookies — нужен полный набор из браузера" };
+      }
+    } catch (e) {
+      log.warn("Не удалось проверить cookies", e);
+    }
+
+    const cookieHeader = await getCookieHeader();
+    store.set("scCookies", cookieHeader);
     store.set("loggedIn", true);
-    mainWindow?.webContents.send("auth-success", parsed.cookieHeader);
+    mainWindow?.webContents.send("auth-success", cookieHeader);
     authWindow?.close();
     authWindow = null;
-    log.info(`Ручной вход: импортировано ${parsed.count} cookies`);
-    return { ok: true, count: parsed.count };
+    log.info(`Ручной вход: импортировано ${count} cookies`);
+    return { ok: true, count };
   });
 
   ipcMain.handle("get-cookies", () => store.get("scCookies") || "");
@@ -508,13 +727,13 @@ function setupIPC() {  // Получить сохранённые настрой
     return store.get("loggedIn");
   });
 
-  // Закрыть окно авторизации и сообщить результат
-  ipcMain.handle("logout", () => {
+  // Выход: чистим cookies именно нашего раздела сессии
+  ipcMain.handle("logout", async () => {
     store.set("loggedIn", false);
     store.set("scCookies", null);
-    // Чистим cookie сессии SoundCloud, чтобы «Выйти» действительно разлогинивал
     try {
-      session.defaultSession.clearStorageData({ storages: ["cookies"] });
+      const ses = session.fromPartition(SC_PARTITION);
+      await ses.clearStorageData({ storages: ["cookies"] });
     } catch (e) {
       log.warn("Не удалось очистить cookies", e);
     }
@@ -538,14 +757,25 @@ function setupIPC() {  // Получить сохранённые настрой
   log.info("IPC handlers зарегистрированы");
 }
 
-// App events
-app.whenReady().then(() => {
-  log.info("Приложение готово");
-  createWindow();
-  createTray();
-  registerGlobalShortcuts();
-  setupIPC();
-});
+// Только первый экземпляр создаёт главное окно.
+const hasSingleInstanceLock = app.requestSingleInstanceLock();
+if (!hasSingleInstanceLock) {
+  app.quit();
+} else {
+  app.on("second-instance", () => {
+    if (mainWindow?.isMinimized()) mainWindow.restore();
+    mainWindow?.show();
+    mainWindow?.focus();
+  });
+
+  app.whenReady().then(() => {
+    log.info("Приложение готово");
+    createWindow();
+    createTray();
+    registerGlobalShortcuts();
+    setupIPC();
+  });
+}
 
 app.on("window-all-closed", () => {
   if (process.platform !== "darwin") {
@@ -554,6 +784,7 @@ app.on("window-all-closed", () => {
 });
 
 app.on("activate", () => {
+  if (!hasSingleInstanceLock) return;
   if (BrowserWindow.getAllWindows().length === 0) {
     createWindow();
   } else {

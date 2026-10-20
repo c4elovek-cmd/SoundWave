@@ -37,11 +37,18 @@ export default function App() {
   const [isAuthRoute, setIsAuthRoute] = useState<"none" | "real" | "manual">("none");
   const [loginMenuOpen, setLoginMenuOpen] = useState(false);
 
-  // Определяем, какое окно открыто
+  // Определяем, какое окно открыто (главное или окно входа)
   useEffect(() => {
-    const hash = window.location.hash;
-    if (hash.startsWith("#/auth/manual")) setIsAuthRoute("manual");
-    else if (hash.startsWith("#/auth")) setIsAuthRoute("real");
+    const readHash = () => {
+      const hash = window.location.hash;
+      if (hash.startsWith("#/auth/manual")) setIsAuthRoute("manual");
+      else if (hash.startsWith("#/auth")) setIsAuthRoute("real");
+      else setIsAuthRoute("none");
+    };
+
+    readHash();
+    window.addEventListener("hashchange", readHash);
+    return () => window.removeEventListener("hashchange", readHash);
   }, []);
 
   // Загрузка конфига при старте
@@ -72,12 +79,6 @@ export default function App() {
 
     // Подписки на события
     window.electronAPI.onAuthSuccess(async (cookies) => {
-      if (cookies === "open-real-login") {
-        // Пользователь нажал «Открыть SoundCloud» в окне авторизации —
-        // сообщаем main-процессу открыть настоящий soundcloud.com/login.
-        // Реализация в main.ts: см. TODO в createAuthWindow.
-        return;
-      }
       setAuthCookies(cookies);
       // Загружаем профиль
       try {
@@ -179,10 +180,10 @@ export default function App() {
                         className="login-menu-item"
                         onClick={() => {
                           setLoginMenuOpen(false);
-                          window.electronAPI?.openAuthWindow();
+                          window.electronAPI?.openRealLogin();
                         }}
                       >
-                        Вход через окно SoundCloud
+                        Войти через SoundCloud
                       </button>
                       <button
                         className="login-menu-item"

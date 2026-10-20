@@ -73,6 +73,14 @@
   text-decoration: underline;
 }
 
+.player-error {
+  font-size: 11px;
+  color: #ff6b5c;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
 /* Центральная часть — контролы */
 .player-controls {
   display: flex;

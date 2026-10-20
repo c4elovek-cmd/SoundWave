@@ -14,8 +14,30 @@ export default function HomePage() {
   const [recommended, setRecommended] = useState<SCTrack[]>([]);
   const [artists, setArtists] = useState<SCUser[]>([]);
   const [playlists, setPlaylists] = useState<SCPlaylist[]>([]);
+  const [trending, setTrending] = useState<SCTrack[]>([]);
+  const [trendingLoading, setTrendingLoading] = useState(true);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
+
+  // Для гостей показываем популярное — charts SoundCloud доступен без входа
+  useEffect(() => {
+    if (isLoggedIn) return;
+    let cancelled = false;
+
+    scApi
+      .getTrending(20)
+      .then((res) => {
+        if (!cancelled) setTrending(res.collection ?? []);
+      })
+      .catch(() => {})
+      .finally(() => {
+        if (!cancelled) setTrendingLoading(false);
+      });
+
+    return () => {
+      cancelled = true;
+    };
+  }, [isLoggedIn]);
 
   const load = async () => {
     setLoading(true);
@@ -82,6 +104,33 @@ export default function HomePage() {
             </button>
           </div>
         </div>
+
+        {trendingLoading && (
+          <div className="section">
+            {Array.from({ length: 6 }, (_, i) => (
+              <div key={i} className="skeleton skeleton-row" />
+            ))}
+          </div>
+        )}
+
+        {trending.length > 0 && (
+          <div className="section">
+            <div className="section-header">
+              <span className="section-title">Популярное сейчас</span>
+            </div>
+            <div className="track-list-header">
+              <span>#</span>
+              <span>Трек</span>
+              <span>Жанр</span>
+              <span>Статистика</span>
+              <span className="right">Время</span>
+              <span />
+            </div>
+            {trending.map((track, i) => (
+              <TrackRow key={track.id} track={track} index={i} queue={trending} />
+            ))}
+          </div>
+        )}
       </div>
     );
   }

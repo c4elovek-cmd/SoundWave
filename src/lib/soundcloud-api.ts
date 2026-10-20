@@ -1,16 +1,17 @@
 /**
- * SoundCloud API wrapper (internal API веб-версии)
+ * SoundCloud API wrapper (внутренний API веб-версии)
  *
  * Официального API у SoundCloud нет, поэтому используем внутреннее API
- * веб-клиента (api-v2.soundcloud.com). Авторизация происходит через
- * cookie сессии, полученные после входа в WebView-окне.
+ * веб-клиента (api-v2.soundcloud.com).
+ *
+ * Запросы уходят в main-процесс: оттуда нет CORS-ограничений, и там можно
+ * передать заголовок Cookie — в renderer браузер такой заголовок вырезает.
+ * Авторизация — cookie сессии, полученные после входа в окне входа.
  */
 
 const API_V2 = "https://api-v2.soundcloud.com";
-const API_WEB = "https://soundcloud.com";
 
 let scCookies: string | null = null;
-let clientId: string | null = null;
 
 export function setAuthCookies(cookies: string) {
   scCookies = cookies;
@@ -21,62 +22,18 @@ export function getAuthCookies(): string | null {
 }
 
 /**
- * Получаем client_id из HTML-страницы SoundCloud.
- * client_id — публичный, но меняется со временем, поэтому извлекаем при необходимости.
+ * Запрос к внутреннему API SoundCloud через main-процесс.
+ * Путь может быть относительным ("/search") или абсолютным (next_href).
  */
-async function getClientId(): Promise<string> {
-  if (clientId) return clientId;
-
-  const html = await fetch(`${API_WEB}/`).then((r) => r.text());
-  const scriptUrls = html.match(/src="(https:\/\/[^"]+\.js)"/g) || [];
-
-  for (const match of scriptUrls) {
-    const src = match?.match(/src="([^"]+)"/)?.[1];
-    if (!src) continue;
-
-    try {
-      const script = await fetch(src).then((r) => r.text());
-      const idMatch = script.match(/"client_id":"([a-zA-Z0-9]{32})"/);
-      if (idMatch) {
-        clientId = idMatch[1];
-        return clientId;
-      }
-    } catch {
-      continue;
-    }
+async function apiRequest<T>(
+  path: string,
+  params: Record<string, string | number> = {}
+): Promise<T> {
+  if (!window.electronAPI?.scRequest) {
+    throw new Error("API SoundCloud доступно только в десктопном приложении");
   }
 
-  throw new Error("Не удалось получить client_id SoundCloud");
-}
-
-async function apiRequest<T>(path: string, params: Record<string, string | number> = {}): Promise<T> {
-  const id = await getClientId();
-  const url = new URL(`${API_V2}${path}`);
-  url.searchParams.set("client_id", id);
-
-  for (const [key, value] of Object.entries(params)) {
-    url.searchParams.set(key, String(value));
-  }
-
-  const headers: Record<string, string> = {
-    Accept: "application/json",
-  };
-
-  if (scCookies) {
-    headers["Cookie"] = scCookies;
-  }
-
-  const response = await fetch(url.toString(), { headers });
-
-  if (!response.ok) {
-    throw new Error(`SoundCloud API error ${response.status}: ${path}`);
-  }
-
-  return response.json();
-}
-
-function fromUrl<T>(url: string): Promise<T> {
-  return fetch(url).then((r) => r.json());
+  return window.electronAPI.scRequest(path, params) as Promise<T>;
 }
 
 // ———————————————————————————————————————————————
@@ -124,10 +81,13 @@ export const scApi = {
     return apiRequest(`/tracks/${id}`);
   },
 
-  // Стрим трека
+  // Прямая ссылка на аудиофайл трека
   async getStreamUrl(trackId: number): Promise<string> {
-    const id = await getClientId();
-    return `${API_V2}/tracks/${trackId}/stream?client_id=${id}`;
+    if (!window.electronAPI?.resolveStream) {
+      throw new Error("Воспроизведение доступно только в десктопном приложении");
+    }
+    const res = await window.electronAPI.resolveStream(trackId);
+    return res.url;
   },
 
   // Поиск
@@ -160,12 +120,24 @@ export const scApi = {
 
   // Загрузить следующую страницу
   async loadNext<T>(nextHref: string): Promise<import("../types/soundcloud").SCPaginatedResponse<T>> {
-    return fromUrl(nextHref);
+    return apiRequest(nextHref);
   },
 
   // Трендовые/популярные треки (для главной)
   async getTrending(limit = 20): Promise<import("../types/soundcloud").SCPaginatedResponse<import("../types/soundcloud").SCTrack>> {
-    return apiRequest("/charts", { kind: "top", genre: "soundcloud:genres:all-music", limit });
+    const res = await apiRequest<any>("/charts", {
+      kind: "trending",
+      genre: "soundcloud:genres:all-music",
+      limit,
+    });
+
+    // charts отдаёт элементы вида { track: {...} }
+    const collection = (res?.collection ?? []).map((item: any) => item.track ?? item).filter(Boolean);
+
+    return {
+      collection,
+      next_href: res?.next_href ?? null,
+    };
   },
 };
 

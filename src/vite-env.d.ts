@@ -13,12 +13,21 @@ declare global {
       openAuthWindow: () => Promise<boolean>;
       openRealLogin: () => Promise<boolean>;
       openManualLogin: () => Promise<boolean>;
+      showAuthChoice: () => Promise<boolean>;
+      closeLoginWindow: () => Promise<boolean>;
       importCookies: (raw: string) => Promise<{ ok: boolean; count?: number; error?: string }>;
       dumpSessionCookies: () => Promise<string>;
       restoreSession: () => Promise<{ loggedIn: boolean; cookies: string }>;
-      closeAuthWindow: (cookies: string) => Promise<boolean>;
       checkLogin: () => Promise<boolean>;
       logout: () => Promise<boolean>;
+      scRequest: (
+        path: string,
+        params?: Record<string, string | number>
+      ) => Promise<unknown>;
+      resolveStream: (
+        trackId: number
+      ) => Promise<{ url: string; protocol: string; duration: number }>;
+      getClientId: () => Promise<string>;
       showWindow: () => Promise<boolean>;
       minimizeToTray: () => Promise<boolean>;
       onAuthSuccess: (callback: (cookies: string) => void) => void;

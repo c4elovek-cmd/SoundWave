@@ -3,9 +3,10 @@ import { Globe, ShieldCheck, MusicNotes, Cookie } from "@phosphor-icons/react";
 import "./Pages.css";
 
 /**
- * Окно выбора способа входа.
- * - «Открыть SoundCloud» — настоящая страница логина (основной способ).
- * - «Войти вручную» — вставка cookies из браузерного расширения.
+ * Экран выбора способа входа (показывается в окне входа).
+ *
+ * Оба способа работают в этом же окне — приложение открывает не больше
+ * двух окон: главное и одно окно входа.
  */
 export default function AuthPage() {
   useEffect(() => {
@@ -18,15 +19,15 @@ export default function AuthPage() {
         <div className="auth-logo">S</div>
         <div className="auth-title">Вход в SoundCloud</div>
         <div className="auth-text">
-          Войди через окно SoundCloud — пароль вводится на самом сайте и не
-          попадает в приложение. Либо вставь cookies, экспортированные из браузера.
+          Выбери способ входа. Пароль вводится на самом SoundCloud — приложение его
+          не видит и не хранит.
         </div>
 
         <button
           className="auth-btn"
           onClick={() => window.electronAPI?.openRealLogin()}
         >
-          Открыть SoundCloud
+          Войти через SoundCloud
         </button>
 
         <button

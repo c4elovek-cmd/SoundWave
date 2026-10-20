@@ -148,16 +148,18 @@
 ### Авторизация (вход в аккаунт)
 
 **Flow:**
-1. При первом запуске — экран логина
-2. Пользователь вводит email/username + password
-3. Приложение эмулирует веб-авторизацию SoundCloud
-4. Сохраняет cookies/tokens в защищённом хранилище
-5. При последующих запусках — автоматический вход
+1. Пользователь жмёт «Войти» — открывается **одно** окно входа (всего в приложении не больше двух окон)
+2. В окне выбирается способ:
+   - «Войти через SoundCloud» — в это же окно грузится настоящая `soundcloud.com/signin`, пароль вводится на самом SoundCloud
+   - «Войти вручную» — в это же окно переключается форма для вставки cookies
+3. После успешного входа SoundCloud уводит на `/discover` (или `/you`) — приложение забирает cookies домена `.soundcloud.com` из раздела сессии `persist:soundcloud`
+4. Cookies кладутся в общий раздел сессии, окно входа закрывается, главное окно получает профиль
+5. При последующих запусках — сессия восстанавливается автоматически (раздел персистентный), вход заново не нужен
 
 **Реализация:**
-- Использование WebView2 (Tauri) с реальной авторизацией на soundcloud.com
-- Перехват cookies после успешного входа
-- Дальнейшие запросы через SoundCloud internal API
+- Окно входа с настоящей страницей soundcloud.com; пароль приложению не видно
+- Запасной путь: ручной импорт cookies (строка заголовка, JSON Cookie-Editor, Netscape cookies.txt) — cookies пишутся в тот же раздел сессии и проверяются запросом `/me`
+- Дальнейшие запросы — через внутренний API SoundCloud из main-процесса (в renderer нельзя передать заголовок `Cookie`)
 
 ### Воспроизведение
 
@@ -245,24 +247,26 @@ src/
 
 **Основные endpoints:**
 ```
-POST   /api/v1/oauth2/token                    # OAuth
 GET    /me                                     # Профиль
 GET    /me/tracks                              # Мои треки
 GET    /me/likes                               # Лайки
+GET    /me/followings                          # Подписки
+GET    /me/playlists                           # Плейлисты
 GET    /users/{id}/tracks                      # Треки пользователя
-GET    /tracks/{id}                            # Информация о треке
-GET    /tracks/{id}/stream                      # URL потока
-GET    /search?q=...                           # Поиск
+GET    /tracks/{id}                            # Информация о треке (media.transcodings)
+GET    /charts?kind=trending&genre=...         # Популярное (без входа)
+GET    /search?q=...&type=tracks|users|playlists # Поиск
 GET    /playlists/{id}                         # Плейлист
 ```
 
-**Stream URL:** Формат HLS/MP3, получается через endpoint `/tracks/{id}/stream`
+**Stream URL:** `/tracks/{id}` отдаёт `media.transcodings`; запрос манифеста
+(`.../stream/progressive?client_id=…`) возвращает подписанный URL файла на CDN — он играется напрямую.
 
 ### Хранение данных
 
-- **Auth tokens:** Tauri's secure storage (encrypted)
-- **Preferences:** localStorage / JSON file
-- **Cache:** В памяти + optional disk cache для artwork
+- **Сессия:** cookies SoundCloud в разделе Electron `persist:soundcloud` (переживает перезапуск)
+- **Настройки:** `electron-store` (тема, громкость, размер окна)
+- **Cache:** в памяти + optional disk cache для artwork
 
 ## Roadmap
 

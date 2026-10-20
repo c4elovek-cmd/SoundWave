@@ -1,6 +1,7 @@
 import { create } from "zustand";
 import { SCTrack, RepeatMode } from "../types/soundcloud";
 import { Howl } from "howler";
+import { scApi } from "../lib/soundcloud-api";
 
 interface PlayerState {
   // Состояние
@@ -14,6 +15,7 @@ interface PlayerState {
   isMuted: boolean;
   repeat: RepeatMode;
   isShuffled: boolean;
+  error: string | null;
 
   // Howl instance
   howl: Howl | null;
@@ -34,6 +36,7 @@ interface PlayerState {
   removeFromQueue: (index: number) => void;
   clearQueue: () => void;
   setProgress: (p: number) => void;
+  setError: (message: string | null) => void;
 }
 
 export const usePlayerStore = create<PlayerState>((set, get) => ({
@@ -48,22 +51,41 @@ export const usePlayerStore = create<PlayerState>((set, get) => ({
   repeat: "off",
   isShuffled: false,
   howl: null,
+  error: null,
 
-  play: (track, queue = [], index = 0) => {
+  play: async (track, queue = [], index = 0) => {
     const { howl: oldHowl } = get();
     if (oldHowl) {
       oldHowl.unload();
     }
 
-    // Заглушка URL — потом заменим на реальный из API
-    const streamUrl = track.stream_url || `https://api.soundcloud.com/tracks/${track.id}/stream?client_id=YOUR_CLIENT_ID`;
+    set({
+      currentTrack: track,
+      queue: queue.length > 0 ? queue : [track],
+      queueIndex: index,
+      progress: 0,
+      error: null,
+    });
+
+    // Ссылка на аудио живёт в подписанном CDN-URL — забираем её у SoundCloud
+    let src = track.stream_url || "";
+    if (!src) {
+      try {
+        src = await scApi.getStreamUrl(track.id);
+      } catch (e) {
+        const message = e instanceof Error ? e.message : "Не удалось получить ссылку на трек";
+        set({ error: message, isPlaying: false });
+        console.error("Ошибка подготовки трека:", e);
+        return;
+      }
+    }
 
     const newHowl = new Howl({
-      src: [streamUrl],
+      src: [src],
       html5: true,
       volume: get().volume,
       onplay: () => {
-        set({ isPlaying: true });
+        set({ isPlaying: true, error: null });
       },
       onpause: () => {
         set({ isPlaying: false });
@@ -82,19 +104,13 @@ export const usePlayerStore = create<PlayerState>((set, get) => ({
       },
       onloaderror: (_id, err) => {
         console.error("Ошибка загрузки трека:", err);
-        set({ isPlaying: false });
+        set({ isPlaying: false, error: "Не удалось загрузить аудио" });
       },
     });
 
     newHowl.play();
 
-    set({
-      currentTrack: track,
-      queue: queue.length > 0 ? queue : [track],
-      queueIndex: index,
-      howl: newHowl,
-      progress: 0,
-    });
+    set({ howl: newHowl });
   },
 
   pause: () => {
@@ -198,4 +214,6 @@ export const usePlayerStore = create<PlayerState>((set, get) => ({
   },
 
   setProgress: (p) => set({ progress: p }),
+
+  setError: (error: string | null) => set({ error }),
 }));

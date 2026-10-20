@@ -28,6 +28,7 @@ export default function Player() {
     isMuted,
     repeat,
     isShuffled,
+    error,
     togglePlay,
     next,
     prev,
@@ -142,6 +143,11 @@ export default function Player() {
           <span className="player-track-artist" title={currentTrack.user.username}>
             {currentTrack.user.username}
           </span>
+          {error && (
+            <span className="player-error" title={error}>
+              {error}
+            </span>
+          )}
         </div>
       </div>
 

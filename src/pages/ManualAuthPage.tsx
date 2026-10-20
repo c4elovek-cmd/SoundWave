@@ -35,7 +35,6 @@ export default function ManualAuthPage() {
       const res = await window.electronAPI.importCookies(raw);
       if (res.ok) {
         setStatus({ kind: "ok", count: res.count ?? 0 });
-        setTimeout(() => window.close(), 1200);
       } else {
         setStatus({ kind: "error", message: res.error ?? "Не удалось распознать cookies" });
       }
@@ -144,14 +143,13 @@ export default function ManualAuthPage() {
             className="link-btn"
             onClick={() => window.electronAPI?.openRealLogin()}
           >
-            Войти через окно SoundCloud
+            Войти через SoundCloud
           </button>
         </div>
 
         <div className="auth-note">
           <ShieldCheck size={12} style={{ verticalAlign: -2, marginRight: 4 }} />
-          Cookie хранится локально в зашифрованном хранилище приложения.
-          Пароль не запрашивается и не сохраняется.
+          Не передавай cookies другим: они дают доступ к аккаунту.
         </div>
       </div>
     </div>
