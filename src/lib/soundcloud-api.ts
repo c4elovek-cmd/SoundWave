@@ -111,6 +111,18 @@ export const scApi = {
     return apiRequest(`/tracks/${id}`);
   },
 
+  // Похожие треки — основа «Моей волны»
+  async getRelated(
+    trackId: number,
+    limit = 20
+  ): Promise<import("../types/soundcloud").SCPaginatedResponse<import("../types/soundcloud").SCTrack>> {
+    const res = await apiRequest<any>(`/tracks/${trackId}/related`, { limit });
+    const collection = (res?.collection ?? [])
+      .map((item: any) => item?.track ?? item)
+      .filter((t: any) => t && typeof t.id === "number" && t.title && t.user);
+    return { collection, next_href: res?.next_href ?? null };
+  },
+
   // Прямая ссылка на аудиофайл трека
   async getStreamUrl(trackId: number): Promise<{ url: string; protocol: string }> {
     if (!window.electronAPI?.resolveStream) {

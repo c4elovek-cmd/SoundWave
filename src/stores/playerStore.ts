@@ -16,6 +16,13 @@ interface PlayerState {
   repeat: RepeatMode;
   isShuffled: boolean;
   error: string | null;
+  /**
+   * Источник новых треков, когда очередь кончилась.
+   * Волна ставит сюда свой refill; null — очередь конечна.
+   */
+  refill: (() => Promise<SCTrack[]>) | null;
+  /** идёт доливка очереди — защита от повторного запуска */
+  refilling: boolean;
 
   // Элемент воспроизведения и HLS-плеер
   audio: HTMLAudioElement | null;
@@ -35,7 +42,9 @@ interface PlayerState {
   toggleShuffle: () => void;
   addToQueue: (track: SCTrack) => void;
   removeFromQueue: (index: number) => void;
+  removeTrackById: (trackId: number) => void;
   clearQueue: () => void;
+  setRefill: (fn: (() => Promise<SCTrack[]>) | null) => void;
   setProgress: (p: number) => void;
   setError: (message: string | null) => void;
 }
@@ -54,6 +63,8 @@ export const usePlayerStore = create<PlayerState>((set, get) => ({
   audio: null,
   hls: null,
   error: null,
+  refill: null,
+  refilling: false,
 
   play: async (track, queue = [], index = 0) => {
     // Гасим предыдущий поток
@@ -185,7 +196,7 @@ export const usePlayerStore = create<PlayerState>((set, get) => ({
   },
 
   next: () => {
-    const { queue, queueIndex, repeat, isShuffled, play } = get();
+    const { queue, queueIndex, repeat, isShuffled, play, refill } = get();
     if (queue.length === 0) return;
 
     let nextIndex: number;
@@ -196,6 +207,34 @@ export const usePlayerStore = create<PlayerState>((set, get) => ({
       nextIndex = queueIndex + 1;
     } else if (repeat === "all") {
       nextIndex = 0;
+    } else if (refill) {
+      // Очередь кончилась, но волна ещё идёт — доливаем следующую порцию
+      if (get().refilling) return;
+      set({ refilling: true });
+
+      void (async () => {
+        let more: SCTrack[] = [];
+
+        try {
+          more = await refill();
+        } catch (e) {
+          console.error("Не удалось долить очередь:", e);
+          set({ refilling: false });
+          return;
+        }
+
+        if (more.length === 0) {
+          set({ refilling: false });
+          return;
+        }
+
+        const current = get();
+        const grown = [...current.queue, ...more];
+        set({ queue: grown, refilling: false });
+        void current.play(grown[current.queueIndex + 1], grown, current.queueIndex + 1);
+      })();
+
+      return;
     } else {
       return; // конец очереди
     }
@@ -264,8 +303,28 @@ export const usePlayerStore = create<PlayerState>((set, get) => ({
     }));
   },
 
+  /**
+   * Убирает трек из очереди по id — используется дизлайком в волне.
+   * Текущий трек не трогаем: его сменой занимается вызывающий.
+   */
+  removeTrackById: (trackId) => {
+    set((state) => {
+      const index = state.queue.findIndex((track) => track.id === trackId);
+      if (index === -1) return state;
+
+      return {
+        queue: state.queue.filter((track) => track.id !== trackId),
+        queueIndex: index < state.queueIndex ? state.queueIndex - 1 : state.queueIndex,
+      };
+    });
+  },
+
   clearQueue: () => {
     set({ queue: [] });
+  },
+
+  setRefill: (fn) => {
+    set({ refill: fn, refilling: false });
   },
 
   setProgress: (p: number) => set({ progress: p }),

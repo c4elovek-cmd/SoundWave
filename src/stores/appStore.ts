@@ -2,7 +2,7 @@ import { create } from "zustand";
 import { SCUser, SCTrack, SCPlaylist } from "../types/soundcloud";
 
 export type Theme = "dark" | "light" | "purple" | "green";
-export type View = "home" | "search" | "library" | "likes" | "uploads" | "playlist" | "artist";
+export type View = "home" | "wave" | "search" | "library" | "likes" | "uploads" | "playlist" | "artist";
 
 interface AppState {
   // Тема

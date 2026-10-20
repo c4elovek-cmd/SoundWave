@@ -16,6 +16,15 @@ export interface SCTrack {
   id: number;
   title: string;
   user: SCUser;
+  // "track" для треков, "user" для профилей, которые SoundCloud
+  // иногда подмешивает в выдачу поиска
+  kind?: string;
+  /**
+   * Политика стриминга: "ALLOW" и "MONETIZE" — обычные треки,
+   * "SNIP" — только 30-секундный фрагмент, "BLOCK" — играть нельзя.
+   */
+  policy?: string;
+  streamable?: boolean;
   artwork_url: string | null;
   waveform_url: string;
   duration: number; // мс

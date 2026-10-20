@@ -11,6 +11,7 @@ import {
   Queue,
   Gear,
   SignOut,
+  Waveform,
 } from "@phosphor-icons/react";
 import { useAppStore, Theme } from "../../stores/appStore";
 import "./Sidebar.css";
@@ -38,6 +39,7 @@ export default function Sidebar() {
 
   const navItems = [
     { id: "home" as const, label: "Главная", icon: House },
+    { id: "wave" as const, label: "Моя волна", icon: Waveform },
     { id: "search" as const, label: "Поиск", icon: MagnifyingGlass },
     { id: "library" as const, label: "Библиотека", icon: MusicNotes },
     { id: "likes" as const, label: "Мне нравится", icon: Heart },

@@ -11,6 +11,7 @@ import {
 import Sidebar from "./components/Sidebar/Sidebar";
 import Player from "./components/Player/Player";
 import HomePage from "./pages/HomePage";
+import WavePage from "./pages/WavePage";
 import SearchPage from "./pages/SearchPage";
 import LibraryPage from "./pages/LibraryPage";
 import AuthPage from "./pages/AuthPage";
@@ -119,6 +120,8 @@ export default function App() {
     switch (view) {
       case "home":
         return <HomePage />;
+      case "wave":
+        return <WavePage />;
       case "search":
         return <SearchPage />;
       case "likes":
