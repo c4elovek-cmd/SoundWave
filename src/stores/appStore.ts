@@ -5,6 +5,7 @@ import {
   applyTheme,
   loadCustomThemes,
   saveCustomThemes,
+  themeBase,
   themeDataId,
 } from "../lib/themes";
 
@@ -41,6 +42,10 @@ interface AppState {
   setLikedTracks: (t: SCTrack[]) => void;
   setUploadedTracks: (t: SCTrack[]) => void;
   setPlaylists: (p: SCPlaylist[]) => void;
+  /** Лайк или снятие лайка трека. */
+  toggleLike: (track: SCTrack) => Promise<void>;
+  likeError: string | null;
+  clearLikeError: () => void;
 
   // Sidebar collapsed
   sidebarCollapsed: boolean;
@@ -74,7 +79,7 @@ export const useAppStore = create<AppState>((set, get) => ({
 
   setTheme: (theme) => {
     applyTheme(theme, get().customThemes);
-    window.electronAPI?.setTheme(theme);
+    window.electronAPI?.setTheme(theme, themeBase(theme, get().customThemes));
     set({ theme });
   },
 
@@ -118,6 +123,28 @@ export const useAppStore = create<AppState>((set, get) => ({
   setLikedTracks: (likedTracks) => set({ likedTracks }),
   setUploadedTracks: (uploadedTracks) => set({ uploadedTracks }),
   setPlaylists: (playlists) => set({ playlists }),
+
+  likeError: null,
+  clearLikeError: () => set({ likeError: null }),
+
+  toggleLike: async (track) => {
+    const state = get();
+    const liked = state.likedTracks.some((item) => item.id === track.id);
+
+    const res = await window.electronAPI?.toggleLike(track.id, !liked);
+
+    if (!res?.ok) {
+      set({ likeError: res?.error ?? "Не удалось изменить лайк" });
+      return;
+    }
+
+    set({
+      likeError: null,
+      likedTracks: liked
+        ? state.likedTracks.filter((item) => item.id !== track.id)
+        : [track, ...state.likedTracks],
+    });
+  },
 
   sidebarCollapsed: false,
   toggleSidebar: () => set((s) => ({ sidebarCollapsed: !s.sidebarCollapsed })),

@@ -47,6 +47,14 @@ interface PlayerState {
   setRefill: (fn: (() => Promise<SCTrack[]>) | null) => void;
   setProgress: (p: number) => void;
   setError: (message: string | null) => void;
+  /**
+   * Номер текущей попытки включения. Любое действие пользователя
+   * увеличивает его — тогда запоздавший ответ сети не запустит трек,
+   * который уже остановили.
+   */
+  playToken: number;
+  /** Пользователь хочет слышать звук (пауза сбрасывает флаг). */
+  shouldPlay: boolean;
 }
 
 export const usePlayerStore = create<PlayerState>((set, get) => ({
@@ -65,8 +73,14 @@ export const usePlayerStore = create<PlayerState>((set, get) => ({
   error: null,
   refill: null,
   refilling: false,
+  playToken: 0,
+  shouldPlay: false,
 
   play: async (track, queue = [], index = 0) => {
+    // Новая попытка включения: всё, что придёт по старому токену, игнорируем.
+    const token = get().playToken + 1;
+    set({ playToken: token, shouldPlay: true });
+
     // Гасим предыдущий поток
     const prevHls = get().hls;
     const prevAudio = get().audio;
@@ -78,6 +92,7 @@ export const usePlayerStore = create<PlayerState>((set, get) => ({
       prevAudio.pause();
       prevAudio.removeAttribute("src");
       prevAudio.load();
+      set({ audio: null });
     }
 
     set({
@@ -105,15 +120,21 @@ export const usePlayerStore = create<PlayerState>((set, get) => ({
       return;
     }
 
+    // Пока шёл запрос, пользователь мог нажать паузу или включить другой трек.
+    if (get().playToken !== token) return;
+
     const audio = new Audio();
     audio.preload = "auto";
     audio.volume = get().volume;
     audio.muted = get().isMuted;
 
     const start = () => {
+      // Трек могли остановить, пока грузился поток.
+      if (get().playToken !== token || !get().shouldPlay) return;
+
       void audio.play().catch((e) => {
         console.error("Не удалось запустить воспроизведение:", e);
-        set({ isPlaying: false });
+        if (get().playToken === token) set({ isPlaying: false });
       });
     };
 
@@ -156,8 +177,12 @@ export const usePlayerStore = create<PlayerState>((set, get) => ({
       if (d > 0) set({ progress: audio.currentTime / d });
     });
 
-    audio.addEventListener("play", () => set({ isPlaying: true, error: null }));
-    audio.addEventListener("pause", () => set({ isPlaying: false }));
+    audio.addEventListener("play", () => {
+      if (get().playToken === token) set({ isPlaying: true, error: null });
+    });
+    audio.addEventListener("pause", () => {
+      if (get().playToken === token) set({ isPlaying: false });
+    });
 
     audio.addEventListener("ended", () => {
       const { repeat, next } = get();
@@ -178,13 +203,22 @@ export const usePlayerStore = create<PlayerState>((set, get) => ({
   },
 
   pause: () => {
-    get().audio?.pause();
-    set({ isPlaying: false });
+    const { audio } = get();
+    // Увеличиваем токен: незавершённая загрузка трека отменится.
+    set({ isPlaying: false, shouldPlay: false, playToken: get().playToken + 1 });
+    audio?.pause();
   },
 
   resume: () => {
-    const { audio } = get();
-    if (!audio) return;
+    const { audio, currentTrack, queue, queueIndex } = get();
+
+    if (!audio) {
+      // Трек ещё грузится или был остановлен — включаем заново.
+      if (currentTrack) get().play(currentTrack, queue, queueIndex);
+      return;
+    }
+
+    set({ shouldPlay: true });
     void audio.play().catch(() => set({ isPlaying: false }));
     set({ isPlaying: true });
   },
@@ -268,18 +302,19 @@ export const usePlayerStore = create<PlayerState>((set, get) => ({
   },
 
   setVolume: (vol: number) => {
-    const { audio, isMuted } = get();
-    if (audio && !isMuted) {
-      audio.volume = vol;
-    }
+    const { audio } = get();
+    // Громкость и mute — независимые вещи: применяем громкость всегда,
+    // иначе после размута звук остаётся на старом уровне.
+    if (audio) audio.volume = vol;
     set({ volume: vol });
     window.electronAPI?.setVolume(vol);
   },
 
   toggleMute: () => {
-    const { audio, isMuted } = get();
+    const { audio, isMuted, volume } = get();
     if (audio) {
       audio.muted = !isMuted;
+      if (isMuted) audio.volume = volume;
     }
     set({ isMuted: !isMuted });
   },

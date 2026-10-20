@@ -251,3 +251,29 @@ export function findActiveLine(lines: LyricsLine[], time: number): number {
 
   return active;
 }
+
+/**
+ * Доля пройденного времени внутри строки (0..1).
+ * Нужна для посимвольной заливки текста: она идёт ровно по звуку.
+ */
+export function lineProgress(lines: LyricsLine[], index: number, time: number): number {
+  if (index < 0 || index >= lines.length) return 0;
+
+  const line = lines[index];
+  if (line.start === null) return 0;
+
+  let end: number | null = null;
+  for (let i = index + 1; i < lines.length; i++) {
+    const start = lines[i].start;
+    if (start !== null && start > line.start) {
+      end = start;
+      break;
+    }
+  }
+
+  // У последней строки явного конца нет — считаем её ровно четыре секунды.
+  const span = end !== null ? end - line.start : 4;
+  if (span <= 0) return 1;
+
+  return Math.min(1, Math.max(0, (time - line.start) / span));
+}

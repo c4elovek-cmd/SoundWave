@@ -14,6 +14,7 @@ import {
   MusicNotes,
   TextAa,
   Microphone,
+  Heart,
 } from "@phosphor-icons/react";
 import { usePlayerStore } from "../../stores/playerStore";
 import { useAppStore } from "../../stores/appStore";
@@ -49,10 +50,40 @@ export default function Player() {
     lyricsVisible,
     openKaraokeFullscreen,
     karaokeFullscreen,
+    likedTracks,
+    toggleLike,
   } = useAppStore();
   const [localProgress, setLocalProgress] = useState(0);
+  const [volumeHint, setVolumeHint] = useState<number | null>(null);
   const rafRef = useRef<number | null>(null);
   const progressBarRef = useRef<HTMLDivElement>(null);
+  const hintTimerRef = useRef<number | null>(null);
+
+  const isLiked = currentTrack
+    ? likedTracks.some((item) => item.id === currentTrack.id)
+    : false;
+
+  // Громкость колёсиком мыши над панелью плеера.
+  const changeVolume = (delta: number) => {
+    const next = Math.min(1, Math.max(0, volume + delta));
+    setVolume(next);
+
+    setVolumeHint(next);
+    if (hintTimerRef.current) window.clearTimeout(hintTimerRef.current);
+    hintTimerRef.current = window.setTimeout(() => setVolumeHint(null), 1200);
+  };
+
+  const handleWheel = (e: React.WheelEvent<HTMLDivElement>) => {
+    if (!currentTrack) return;
+    changeVolume(e.deltaY > 0 ? -0.04 : 0.04);
+  };
+
+  useEffect(
+    () => () => {
+      if (hintTimerRef.current) window.clearTimeout(hintTimerRef.current);
+    },
+    []
+  );
 
   // Обновление прогресса через requestAnimationFrame
   useEffect(() => {
@@ -141,7 +172,7 @@ export default function Player() {
   const currentSec = Math.floor(localProgress * (duration / 1000));
 
   return (
-    <div className="player-bar">
+    <div className="player-bar" onWheel={handleWheel}>
       {/* Левая часть — трек */}
       <div className="player-track">
         <div className="player-artwork">
@@ -160,6 +191,13 @@ export default function Player() {
             </span>
           )}
         </div>
+        <button
+          className={`icon-btn player-like ${isLiked ? "active" : ""}`}
+          onClick={() => void toggleLike(currentTrack)}
+          title={isLiked ? "Убрать из избранного" : "В избранное"}
+        >
+          <Heart size={18} weight={isLiked ? "fill" : "regular"} />
+        </button>
       </div>
 
       {/* Центр — контролы */}
@@ -261,6 +299,19 @@ export default function Player() {
           />
         </div>
       </div>
+
+      {volumeHint !== null && (
+        <div className="volume-hint">
+          {volumeHint === 0 ? (
+            <SpeakerX size={16} />
+          ) : volumeHint < 0.5 ? (
+            <SpeakerLow size={16} />
+          ) : (
+            <SpeakerHigh size={16} />
+          )}
+          <span>{Math.round(volumeHint * 100)}%</span>
+        </div>
+      )}
     </div>
   );
 }

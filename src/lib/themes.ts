@@ -107,6 +107,19 @@ export function applyTheme(themeId: string, customThemes: CustomTheme[]): void {
   root.style.setProperty("--accent-text", readableTextColor(custom.accent));
 }
 
+/** Основа темы: тёмная или светлая. Нужна, чтобы фон окна совпадал с фоном. */
+export function themeBase(
+  themeId: string,
+  customThemes: CustomTheme[]
+): "dark" | "light" {
+  const custom = themeId.startsWith("custom:")
+    ? customThemes.find((theme) => themeDataId(theme) === themeId)
+    : undefined;
+
+  if (custom) return custom.base;
+  return themeId === "light" ? "light" : "dark";
+}
+
 function isCustomTheme(value: unknown): value is CustomTheme {
   if (!value || typeof value !== "object") return false;
   const theme = value as Partial<CustomTheme>;

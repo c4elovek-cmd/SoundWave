@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useState } from "react";
 import {
   CaretLeft,
   CaretRight,
@@ -9,6 +9,7 @@ import {
   Trash,
 } from "@phosphor-icons/react";
 import Sidebar from "./components/Sidebar/Sidebar";
+import TitleBar from "./components/TitleBar/TitleBar";
 import Player from "./components/Player/Player";
 import LyricsPanel from "./components/Lyrics/LyricsPanel";
 import KaraokeFullscreen from "./components/Lyrics/KaraokeFullscreen";
@@ -24,6 +25,7 @@ import { usePlayerStore } from "./stores/playerStore";
 import { setAuthCookies } from "./lib/soundcloud-api";
 import { startAgentBridge } from "./lib/agentBridge";
 import { syncCustomFonts } from "./lib/fonts";
+import { pushDiscordPresence } from "./lib/discordPresence";
 import { useSettingsStore } from "./stores/settingsStore";
 import "./components/Layout/Layout.css";
 
@@ -44,7 +46,6 @@ export default function App() {
     usePlayerStore();
   const [isAuthRoute, setIsAuthRoute] = useState<"none" | "real" | "manual">("none");
   const [loginMenuOpen, setLoginMenuOpen] = useState(false);
-  const presenceStart = useRef(Math.floor(Date.now() / 1000));
 
   // Определяем, какое окно открыто (главное или окно входа)
   useEffect(() => {
@@ -66,7 +67,7 @@ export default function App() {
     return startAgentBridge();
   }, []);
 
-  // Настройки внешнего вида: анимации и плотность.
+  // Настройки внешнего вида: анимации, плотность и стиль оформления.
   useEffect(() => {
     const apply = () => {
       const settings = useSettingsStore.getState();
@@ -75,6 +76,7 @@ export default function App() {
         "density-compact",
         settings.density === "compact"
       );
+      document.documentElement.dataset.style = settings.style;
     };
 
     apply();
@@ -102,29 +104,13 @@ export default function App() {
 
   // Discord Rich Presence: держим активность в текущем состоянии.
   useEffect(() => {
-    const update = () => {
-      const { currentTrack, isPlaying } = usePlayerStore.getState();
-
-      if (!currentTrack) {
-        void window.electronAPI?.setDiscordPresence?.(null);
-        return;
-      }
-
-      void window.electronAPI?.setDiscordPresence?.({
-        details: currentTrack.title,
-        state: isPlaying ? (currentTrack.user?.username ?? "SoundWave") : "пауза",
-        largeText: "SoundWave",
-        smallText: isPlaying ? "Сейчас играет" : "На паузе",
-        startTimestamp: presenceStart.current,
-      });
-    };
-
-    update();
+    pushDiscordPresence();
 
     return usePlayerStore.subscribe((state, prev) => {
       const trackChanged = state.currentTrack?.id !== prev.currentTrack?.id;
-      if (trackChanged) presenceStart.current = Math.floor(Date.now() / 1000);
-      if (trackChanged || state.isPlaying !== prev.isPlaying) update();
+      if (trackChanged || state.isPlaying !== prev.isPlaying) {
+        pushDiscordPresence();
+      }
     });
   }, []);
 
@@ -209,6 +195,7 @@ export default function App() {
 
   return (
     <div className="app-shell">
+      <TitleBar />
       <div className="app-body">
         <Sidebar />
 

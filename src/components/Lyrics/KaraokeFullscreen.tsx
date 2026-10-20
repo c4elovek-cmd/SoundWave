@@ -13,7 +13,7 @@ import { usePlayerStore } from "../../stores/playerStore";
 import { useAppStore } from "../../stores/appStore";
 import { useLyricsStore } from "../../stores/lyricsStore";
 import { useSettingsStore } from "../../stores/settingsStore";
-import { buildTimedLyrics, findActiveLine } from "../../lib/lyrics";
+import { buildTimedLyrics, findActiveLine, lineProgress } from "../../lib/lyrics";
 import { fontStack } from "../../lib/fonts";
 import { formatDuration } from "../../lib/soundcloud-api";
 import "./KaraokeFullscreen.css";
@@ -44,6 +44,7 @@ export default function KaraokeFullscreen() {
   const fillRef = useRef<HTMLDivElement>(null);
   const timeRef = useRef<HTMLSpanElement>(null);
   const barRef = useRef<HTMLDivElement>(null);
+  const linesRef = useRef<HTMLDivElement>(null);
 
   const fontStackValue = useMemo(
     () => fontStack(lyricsFont, customFonts),
@@ -106,6 +107,15 @@ export default function KaraokeFullscreen() {
       if (timedLines.length > 0) {
         const nextLine = findActiveLine(timedLines, time);
         setActiveLine((prev) => (prev === nextLine ? prev : nextLine));
+
+        // Заливка текста идёт по звуку: доля пройденного времени строки.
+        if (linesRef.current) {
+          const progress = lineProgress(timedLines, nextLine, time);
+          linesRef.current.style.setProperty(
+            "--karaoke-progress",
+            `${(progress * 100).toFixed(2)}%`
+          );
+        }
       }
 
       raf = requestAnimationFrame(tick);
@@ -274,7 +284,11 @@ export default function KaraokeFullscreen() {
         )}
 
         {!showStatus && (
-          <div className="karaoke-fs-lines" style={{ fontSize: `${fontSize}px` }}>
+          <div
+            className="karaoke-fs-lines"
+            ref={linesRef}
+            style={{ fontSize: `${fontSize}px` }}
+          >
             {visibleLines.map((line) => (
               <div
                 key={line.index}

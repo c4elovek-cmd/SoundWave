@@ -53,6 +53,7 @@ const store = new Store({
     agentApiPort: 4783,
     agentApiToken: "",
     agentApiEnabled: true,
+    scClientId: "",
     customFonts: [] as StoredFont[],
     discordEnabled: false,
     discordClientId: "",
@@ -137,7 +138,10 @@ const BROWSER_UA =
 /**
  * client_id SoundCloud — публичный идентификатор веб-клиента.
  * Он периодически меняется, поэтому вытаскиваем его из JS-бандлов soundcloud.com
- * и кешируем на время работы приложения.
+ * и кешируем: в памяти на время работы и в конфиге между запусками.
+ *
+ * Кэш в конфиге важен: если soundcloud.com недоступен (или отдаёт таймаут),
+ * приложение всё равно должно работать с уже известным идентификатором.
  */
 let clientId: string | null = null;
 let clientIdPromise: Promise<string> | null = null;
@@ -145,23 +149,31 @@ let clientIdPromise: Promise<string> | null = null;
 async function getClientId(): Promise<string> {
   if (clientId) return clientId;
 
+  const saved = String(store.get("scClientId") ?? "");
+  if (saved) clientId = saved;
+
   if (!clientIdPromise) {
     clientIdPromise = (async () => {
       const html = await fetch("https://soundcloud.com/", {
         headers: { "User-Agent": BROWSER_UA },
+        signal: AbortSignal.timeout(12_000),
       }).then((r) => r.text());
 
       const scripts = [...html.matchAll(/src="([^"]+\.js)"/g)].map((m) => m[1]);
 
       for (const src of scripts.slice(0, 15)) {
         try {
-          const js = await fetch(src, { headers: { "User-Agent": BROWSER_UA } }).then((r) => r.text());
+          const js = await fetch(src, {
+            headers: { "User-Agent": BROWSER_UA },
+            signal: AbortSignal.timeout(12_000),
+          }).then((r) => r.text());
           const match =
             js.match(/"client_id":"([A-Za-z0-9]{32})"/) ||
             js.match(/client_id[=:]"?([A-Za-z0-9]{32})"/) ||
             js.match(/"client_id":"([^"]{8,64})"/);
           if (match) {
             clientId = match[1];
+            store.set("scClientId", clientId);
             log.info(`client_id SoundCloud получен`);
             return clientId;
           }
@@ -173,12 +185,22 @@ async function getClientId(): Promise<string> {
       const inHtml = html.match(/"client_id":"([A-Za-z0-9]{32})"/);
       if (inHtml) {
         clientId = inHtml[1];
+        store.set("scClientId", clientId);
         return clientId;
       }
 
       throw new Error("Не удалось получить client_id SoundCloud");
     })().catch((e) => {
       clientIdPromise = null;
+
+      // Сайт недоступен — берём идентификатор из прошлого раза.
+      const savedId = String(store.get("scClientId") ?? "");
+      if (savedId) {
+        log.warn("client_id не удалось обновить, берём сохранённый");
+        clientId = savedId;
+        return savedId;
+      }
+
       throw e;
     });
   }
@@ -249,6 +271,42 @@ async function fetchWithRetry(url: string, init: RequestInit, attempts = 3): Pro
   }
 
   throw lastError;
+}
+
+/**
+ * Мягкий лимитер запросов к SoundCloud: не больше трёх одновременных и
+ * не чаще одного запроса в 150 мс. Так клиент не выглядит для API
+ * агрессивным и не упирается в серверные ограничения.
+ */
+const SC_MAX_PARALLEL = 3;
+const SC_MIN_INTERVAL = 150;
+
+let scInFlight = 0;
+let scLastRequest = 0;
+const scQueue: (() => void)[] = [];
+
+function withScThrottle<T>(task: () => Promise<T>): Promise<T> {
+  return new Promise<T>((resolve, reject) => {
+    const run = async () => {
+      const wait = Math.max(0, scLastRequest + SC_MIN_INTERVAL - Date.now());
+      if (wait > 0) await new Promise((r) => setTimeout(r, wait));
+
+      scLastRequest = Date.now();
+      scInFlight += 1;
+
+      try {
+        resolve(await task());
+      } catch (e) {
+        reject(e);
+      } finally {
+        scInFlight -= 1;
+        scQueue.shift()?.();
+      }
+    };
+
+    if (scInFlight < SC_MAX_PARALLEL) void run();
+    else scQueue.push(() => void run());
+  });
 }
 
 /* ==================== Тексты песен (Genius) ==================== */
@@ -725,6 +783,26 @@ async function restartAgentApi(): Promise<void> {
   await startAgentApiIfEnabled();
 }
 
+/**
+ * Id текущего пользователя. Кэшируем: он не меняется в рамках сессии.
+ */
+let currentUserId: number | null = null;
+
+async function getCurrentUserId(): Promise<number> {
+  if (currentUserId) return currentUserId;
+
+  const id = await getClientId();
+  const res = await fetchWithRetry(`${API_V2}/me?client_id=${id}`, {
+    headers: await apiHeaders(),
+  });
+
+  if (!res.ok) throw new Error("SoundCloud требует входа в аккаунт");
+
+  const me = (await res.json()) as { id: number };
+  currentUserId = me.id;
+  return currentUserId;
+}
+
 function createWindow() {
   const bounds = store.get("windowBounds") as { width: number; height: number };
 
@@ -737,6 +815,10 @@ function createWindow() {
     backgroundColor: "#121212",
     icon: appIconPath(),
     autoHideMenuBar: true,
+    // Своя рамка окна: системный заголовок и кнопки убираем,
+    // свернуть/развернуть/закрыть рисуем сами.
+    frame: false,
+    roundedCorners: true,
     show: false,
     webPreferences: {
       preload: path.join(__dirname, "preload.cjs"),
@@ -783,6 +865,17 @@ function createWindow() {
   mainWindow.on("leave-full-screen", () => {
     mainWindow?.webContents.send("app-fullscreen-changed", false);
   });
+
+  // Развернуто/восстановлено — сообщаем рендереру, чтобы поменять иконку.
+  const sendMaximized = () => {
+    mainWindow?.webContents.send(
+      "window-maximized-changed",
+      mainWindow?.isMaximized() ?? false
+    );
+  };
+
+  mainWindow.on("maximize", sendMaximized);
+  mainWindow.on("unmaximize", sendMaximized);
 
   // Загрузка
   if (VITE_DEV_SERVER_URL) {
@@ -979,6 +1072,12 @@ function createTray() {
       },
     },
     {
+      label: "Свернуть в трей",
+      click: () => {
+        mainWindow?.hide();
+      },
+    },
+    {
       label: "Выйти",
       click: () => {
         isQuitting = true;
@@ -1101,8 +1200,13 @@ function setupIPC() {  // Получить сохранённые настрой
   });
 
   // Сохранить тему
-  ipcMain.handle("set-theme", (_event, theme: string) => {
+  ipcMain.handle("set-theme", (_event, theme: string, base?: string) => {
     store.set("theme", theme);
+    // Фон окна совпадает с фоном приложения — тогда скруглённые углы
+    // не выделяются тёмной рамкой.
+    if (base && mainWindow && !mainWindow.isDestroyed()) {
+      mainWindow.setBackgroundColor(base === "light" ? "#ffffff" : "#121212");
+    }
     return true;
   });
 
@@ -1142,6 +1246,101 @@ function setupIPC() {  // Получить сохранённые настрой
   });
 
   /**
+   * Запись во внутренний API SoundCloud: POST / PUT / DELETE.
+   * Читать приватные коллекции и менять лайки можно только с OAuth-токеном,
+   * который приложение достаёт при входе.
+   */
+  ipcMain.handle(
+    "sc-write",
+    async (
+      _event,
+      method: string,
+      path: string,
+      params: Record<string, string | number> = {}
+    ) => {
+      const id = await getClientId();
+
+      const url = path.startsWith("http")
+        ? new URL(path)
+        : new URL(`${API_V2}${path.startsWith("/") ? path : `/${path}`}`);
+
+      if (!url.searchParams.has("client_id")) url.searchParams.set("client_id", id);
+      for (const [key, value] of Object.entries(params ?? {})) {
+        url.searchParams.set(key, String(value));
+      }
+
+      const res = await withScThrottle(async () =>
+        fetch(url.toString(), {
+          method: method.toUpperCase(),
+          headers: await apiHeaders(),
+        })
+      );
+
+      const text = await res.text();
+
+      if (!res.ok) {
+        throw new Error(
+          `SoundCloud API вернул ошибку ${res.status} (${method.toUpperCase()} ${url.pathname}): ${text.slice(0, 200)}`,
+        );
+      }
+
+      try {
+        return JSON.parse(text);
+      } catch {
+        return text;
+      }
+    }
+  );
+
+  // Лайк / снятие лайка.
+  //
+  // SoundCloud больше не хранит лайки отдельной записью: это трек в
+  // системном плейлисте «personalized-tracks» пользователя. Путь и метод
+  // (PUT — поставить лайк, DELETE — снять) — те же, что использует веб-клиент.
+  ipcMain.handle(
+    "sc-toggle-like",
+    async (_event, trackId: number, like: boolean) => {
+      try {
+        const userId = await getCurrentUserId();
+        const clientId = await getClientId();
+
+        const urn = `soundcloud:system-playlists:personalized-tracks:${userId}:${trackId}`;
+        const url = `${API_V2}/users/${userId}/system_playlist_likes/${urn}?client_id=${clientId}&app_locale=ru`;
+
+        const res = await withScThrottle(async () =>
+          fetch(url, {
+            method: like ? "PUT" : "DELETE",
+            headers: await apiHeaders(),
+          })
+        );
+
+        const body = await res.text();
+        log.info(`Лайк ${like ? "+" : "-"} трек ${trackId}: ${res.status} ${body.slice(0, 120)}`);
+
+        // Повторный PUT (трек уже лайкнут) SoundCloud отвечает 500,
+        // а DELETE несуществующего лайка — 404. В обоих случаях нужное
+        // состояние уже достигнуто, поэтому это не ошибка.
+        const stateAlreadyReached = (like && res.status === 500) || (!like && res.status === 404);
+
+        if (!res.ok && !stateAlreadyReached) {
+          throw new Error(
+            res.status === 401
+              ? "Нужен вход в аккаунт SoundCloud"
+              : `SoundCloud API вернул ошибку ${res.status}`,
+          );
+        }
+
+        return { ok: true, liked: like };
+      } catch (e) {
+        return {
+          ok: false,
+          error: e instanceof Error ? e.message : "Не удалось изменить лайк",
+        };
+      }
+    }
+  );
+
+  /**
    * Прокси к внутреннему API SoundCloud.
    * Запросы идут из main-процесса: там нет CORS-ограничений и можно передать Cookie,
    * который браузер в renderer обрезает как запрещённый заголовок.
@@ -1160,7 +1359,9 @@ function setupIPC() {  // Получить сохранённые настрой
         url.searchParams.set(key, String(value));
       }
 
-      const res = await fetchWithRetry(url.toString(), { headers: await apiHeaders() });
+      const res = await withScThrottle(async () =>
+        fetchWithRetry(url.toString(), { headers: await apiHeaders() })
+      );
       const text = await res.text();
 
       if (!res.ok) {
@@ -1386,6 +1587,30 @@ function setupIPC() {  // Получить сохранённые настрой
   // Минимизировать в трей
   ipcMain.handle("minimize-to-tray", () => {
     mainWindow?.hide();
+    return true;
+  });
+
+  // Свои кнопки окна
+  ipcMain.handle("window-minimize", () => {
+    mainWindow?.minimize();
+    return true;
+  });
+
+  ipcMain.handle("window-toggle-maximize", () => {
+    if (!mainWindow || mainWindow.isDestroyed()) return false;
+    if (mainWindow.isMaximized()) mainWindow.unmaximize();
+    else mainWindow.maximize();
+    return mainWindow.isMaximized();
+  });
+
+  ipcMain.handle("window-is-maximized", () => {
+    return mainWindow?.isMaximized() ?? false;
+  });
+
+  ipcMain.handle("window-close", () => {
+    // Закрытие из окна — это выход из приложения, а не сворачивание в трей.
+    isQuitting = true;
+    mainWindow?.close();
     return true;
   });
 

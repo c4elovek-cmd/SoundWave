@@ -9,7 +9,7 @@ declare global {
         loggedIn: boolean;
         version?: string;
       }>;
-      setTheme: (theme: string) => Promise<boolean>;
+      setTheme: (theme: string, base?: string) => Promise<boolean>;
       setVolume: (volume: number) => Promise<boolean>;
       openAuthWindow: () => Promise<boolean>;
       openRealLogin: () => Promise<boolean>;
@@ -30,6 +30,15 @@ declare global {
         trackId: number
       ) => Promise<{ url: string; protocol: string; duration: number }>;
       getClientId: () => Promise<string>;
+      scWrite: (
+        method: string,
+        path: string,
+        params?: Record<string, string | number>
+      ) => Promise<unknown>;
+      toggleLike: (
+        trackId: number,
+        like: boolean
+      ) => Promise<{ ok: boolean; liked?: boolean; error?: string }>;
       getLyrics: (
         title: string,
         artist: string
@@ -68,6 +77,11 @@ declare global {
       minimizeToTray: () => Promise<boolean>;
       setFullscreen: (value: boolean) => Promise<boolean>;
       onFullscreenChanged: (callback: (value: boolean) => void) => () => void;
+      windowMinimize: () => Promise<boolean>;
+      windowToggleMaximize: () => Promise<boolean>;
+      windowIsMaximized: () => Promise<boolean>;
+      windowClose: () => Promise<boolean>;
+      onWindowMaximizedChanged: (callback: (value: boolean) => void) => () => void;
       listCustomFonts: () => Promise<
         {
           id: string;

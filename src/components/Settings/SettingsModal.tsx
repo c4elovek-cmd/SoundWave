@@ -17,7 +17,7 @@ import {
 } from "@phosphor-icons/react";
 import { useAppStore } from "../../stores/appStore";
 import { usePlayerStore } from "../../stores/playerStore";
-import { useSettingsStore } from "../../stores/settingsStore";
+import { useSettingsStore, UiStyle } from "../../stores/settingsStore";
 import {
   BUILTIN_FONTS,
   CUSTOM_FONT_PREFIX,
@@ -26,10 +26,24 @@ import {
   syncCustomFonts,
 } from "../../lib/fonts";
 import { BUILTIN_THEMES, CustomTheme, themeDataId } from "../../lib/themes";
+import { pushDiscordPresence } from "../../lib/discordPresence";
 import ThemeEditor from "../ThemeEditor/ThemeEditor";
 import "./SettingsModal.css";
 
 type TabId = "appearance" | "lyrics" | "player" | "discord" | "api" | "about";
+
+const STYLES: {
+  id: UiStyle;
+  label: string;
+  hint: string;
+}[] = [
+  { id: "classic", label: "Классический", hint: "Оформление в духе Spotify" },
+  { id: "minimal", label: "Минимализм", hint: "Плоский дизайн, без теней" },
+  { id: "contrast", label: "Контрастная", hint: "Чёрный фон, чёткие границы" },
+  { id: "glass", label: "Глассморфизм", hint: "Полупрозрачные панели" },
+  { id: "threeD", label: "3D", hint: "Объём, тени и градиенты" },
+  { id: "bento", label: "Bento Grid", hint: "Модульная сетка плитками" },
+];
 
 const TABS: { id: TabId; label: string; icon: typeof Gear }[] = [
   { id: "appearance", label: "Внешний вид", icon: PaintBrush },
@@ -201,6 +215,9 @@ export default function SettingsModal() {
     setSetting("discordEnabled", info.enabled);
     setSetting("discordClientId", info.clientId);
     setSetting("discordLargeImage", info.largeImage);
+
+    // Активность отправляем сразу, а не ждём смены трека.
+    if (info.enabled && info.connected) pushDiscordPresence();
   };
 
   const renderTab = () => {
@@ -259,6 +276,27 @@ export default function SettingsModal() {
                   <Plus size={15} />
                   Своя тема
                 </button>
+              </div>
+            </div>
+
+            <div className="settings-section">
+              <h3>Стиль оформления</h3>
+              <div className="settings-style-grid">
+                {STYLES.map((item) => (
+                  <button
+                    key={item.id}
+                    className={`settings-style-card ${settings.style === item.id ? "active" : ""}`}
+                    onClick={() => setSetting("style", item.id)}
+                  >
+                    <span className={`settings-style-preview ${item.id}`}>
+                      <span />
+                      <span />
+                      <span />
+                    </span>
+                    <span className="settings-style-name">{item.label}</span>
+                    <span className="settings-style-hint">{item.hint}</span>
+                  </button>
+                ))}
               </div>
             </div>
 
@@ -475,7 +513,7 @@ export default function SettingsModal() {
 
               <Row
                 label="Client ID"
-                hint="ID приложения из Discord Developer Portal"
+                hint="Application ID из раздела General Information"
               >
                 <input
                   className="settings-input"
@@ -499,21 +537,40 @@ export default function SettingsModal() {
                 />
               </Row>
 
+              <div className="settings-steps">
+                <span className="settings-steps-title">Как получить Client ID</span>
+                <ol>
+                  <li>
+                    Открой{" "}
+                    <button
+                      className="settings-link"
+                      onClick={() =>
+                        void window.electronAPI?.openExternal(
+                          "https://discord.com/developers/applications"
+                        )
+                      }
+                    >
+                      discord.com/developers/applications
+                      <ArrowSquareOut size={12} />
+                    </button>
+                  </li>
+                  <li>Нажми «Create» → «Create new application», назови SoundWave</li>
+                  <li>
+                    В разделе General Information скопируй Application ID и вставь
+                    выше
+                  </li>
+                  <li>
+                    В разделе Rich Presence загрузи картинку и укажи её имя
+                    («soundwave») — тогда в профиле будет обложка
+                  </li>
+                </ol>
+              </div>
+
               <p className="settings-note">
-                Rich Presence работает только с Discord для ПК. Нужен свой Client ID —
-                создайте приложение на{" "}
-                <button
-                  className="settings-link"
-                  onClick={() =>
-                    void window.electronAPI?.openExternal(
-                      "https://discord.com/developers/applications"
-                    )
-                  }
-                >
-                  discord.com/developers
-                  <ArrowSquareOut size={12} />
-                </button>
-                .
+                Rich Presence работает только с настольным Discord для ПК. В
+                приложении используется локальный канал Discord RPC — те же
+                cookies, что и у официального приложения, ничего лишнего наружу не
+                отправляется.
               </p>
 
               <div className="settings-status">
@@ -524,7 +581,9 @@ export default function SettingsModal() {
                 />
                 {discord?.connected
                   ? "Подключено к Discord"
-                  : "Нет подключения — проверьте, запущен ли Discord"}
+                  : !settings.discordClientId
+                    ? "Укажите Client ID — без него Discord не подключится"
+                    : "Нет подключения — проверьте, запущен ли Discord"}
               </div>
             </div>
           </>

@@ -2,6 +2,7 @@ import { create } from "zustand";
 
 export type Density = "comfortable" | "compact";
 export type RepeatSetting = "off" | "all" | "one";
+export type UiStyle = "classic" | "minimal" | "contrast" | "glass" | "threeD" | "bento";
 
 export interface CustomFontInfo {
   id: string;
@@ -16,6 +17,7 @@ export interface SettingsValues {
   // Внешний вид
   animations: boolean;
   density: Density;
+  style: UiStyle;
   sidebarCollapsed: boolean;
 
   // Текст и караоке
@@ -43,6 +45,7 @@ export interface SettingsValues {
 const DEFAULTS: SettingsValues = {
   animations: true,
   density: "comfortable",
+  style: "classic",
   sidebarCollapsed: false,
 
   lyricsFont: "sans",
@@ -130,6 +133,7 @@ export const useSettingsStore = create<SettingsState>((set, get) => ({
     persist({
       animations: state.animations,
       density: state.density,
+      style: state.style,
       sidebarCollapsed: state.sidebarCollapsed,
       lyricsFont: state.lyricsFont,
       lyricsFontSize: state.lyricsFontSize,

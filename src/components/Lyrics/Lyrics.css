@@ -123,10 +123,36 @@
 }
 
 .lyrics-line.karaoke-line.active {
-  color: var(--accent);
+  /* Текст заливается слева направо по ходу звука */
+  background: linear-gradient(
+    90deg,
+    var(--accent) 0 var(--karaoke-progress, 0%),
+    var(--text-primary) var(--karaoke-progress, 0%) 100%
+  );
+  -webkit-background-clip: text;
+  background-clip: text;
+  color: transparent;
+  -webkit-text-fill-color: transparent;
   font-weight: 700;
   opacity: 1;
   transform: translateX(4px);
+  animation: lyrics-line-in 320ms cubic-bezier(0.22, 1, 0.36, 1);
+}
+
+@keyframes lyrics-line-in {
+  from {
+    opacity: 0.4;
+    transform: translateX(0);
+  }
+  to {
+    opacity: 1;
+    transform: translateX(4px);
+  }
+}
+
+.lyrics-body.karaoke {
+  /* Доля пройденного времени строки — её двигает звук */
+  --karaoke-progress: 0%;
 }
 
 /* Панель инструментов над текстом */

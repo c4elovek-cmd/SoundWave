@@ -12,7 +12,7 @@ import { usePlayerStore } from "../../stores/playerStore";
 import { useAppStore } from "../../stores/appStore";
 import { useLyricsStore } from "../../stores/lyricsStore";
 import { useSettingsStore } from "../../stores/settingsStore";
-import { buildTimedLyrics, findActiveLine, LyricsLine } from "../../lib/lyrics";
+import { buildTimedLyrics, findActiveLine, lineProgress, LyricsLine } from "../../lib/lyrics";
 import { BUILTIN_FONTS, CUSTOM_FONT_PREFIX, fontStack } from "../../lib/fonts";
 import "./Lyrics.css";
 
@@ -72,6 +72,14 @@ export default function LyricsPanel() {
       const time = audio?.currentTime ?? 0;
       const next = findActiveLine(timedLines, time);
       setActiveLine((prev) => (prev === next ? prev : next));
+
+      // Заливка текста идёт по звуку: доля пройденного времени строки.
+      const body = bodyRef.current;
+      if (body) {
+        const progress = lineProgress(timedLines, next, time);
+        body.style.setProperty("--karaoke-progress", `${(progress * 100).toFixed(2)}%`);
+      }
+
       raf = requestAnimationFrame(tick);
     };
 

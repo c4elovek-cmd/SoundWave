@@ -1,6 +1,7 @@
 import { Play, MusicNotes, Heart } from "@phosphor-icons/react";
 import { SCTrack } from "../../types/soundcloud";
 import { usePlayerStore } from "../../stores/playerStore";
+import { useAppStore } from "../../stores/appStore";
 import { formatDuration, formatNumber } from "../../lib/soundcloud-api";
 import "./TrackRow.css";
 
@@ -22,7 +23,10 @@ export default function TrackRow({
   showArtist = true,
 }: Props) {
   const { currentTrack, isPlaying, play, togglePlay } = usePlayerStore();
+  const likedTracks = useAppStore((s) => s.likedTracks);
+  const toggleLike = useAppStore((s) => s.toggleLike);
 
+  const liked = isLiked ?? likedTracks.some((item) => item.id === track.id);
   const isCurrent = currentTrack?.id === track.id;
   const isPlayingThis = isCurrent && isPlaying;
 
@@ -87,14 +91,15 @@ export default function TrackRow({
       <span className="track-duration">{formatDuration(track.duration)}</span>
 
       <button
-        className={`track-like ${isLiked ? "liked" : ""}`}
+        className={`track-like ${liked ? "liked" : ""}`}
         onClick={(e) => {
           e.stopPropagation();
-          onLike?.(track);
+          if (onLike) onLike(track);
+          else void toggleLike(track);
         }}
-        title={isLiked ? "Убрать из избранного" : "В избранное"}
+        title={liked ? "Убрать из избранного" : "В избранное"}
       >
-        <Heart size={16} weight={isLiked ? "fill" : "regular"} />
+        <Heart size={16} weight={liked ? "fill" : "regular"} />
       </button>
     </div>
   );

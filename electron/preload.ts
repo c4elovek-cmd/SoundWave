@@ -70,7 +70,8 @@ if (isExternalPage) {
   contextBridge.exposeInMainWorld("electronAPI", {
     // Конфигурация
     getConfig: () => ipcRenderer.invoke("get-config"),
-    setTheme: (theme: string) => ipcRenderer.invoke("set-theme", theme),
+    setTheme: (theme: string, base?: string) =>
+      ipcRenderer.invoke("set-theme", theme, base ?? ""),
     setVolume: (volume: number) => ipcRenderer.invoke("set-volume", volume),
 
     // Авторизация
@@ -91,6 +92,13 @@ if (isExternalPage) {
       ipcRenderer.invoke("sc-request", path, params ?? {}),
     resolveStream: (trackId: number) => ipcRenderer.invoke("sc-resolve-stream", trackId),
     getClientId: () => ipcRenderer.invoke("get-client-id"),
+    scWrite: (
+      method: string,
+      path: string,
+      params?: Record<string, string | number>
+    ) => ipcRenderer.invoke("sc-write", method, path, params ?? {}),
+    toggleLike: (trackId: number, like: boolean) =>
+      ipcRenderer.invoke("sc-toggle-like", trackId, like),
 
     // Тексты песен с Genius и внешние ссылки
     getLyrics: (title: string, artist: string) =>
@@ -159,6 +167,19 @@ if (isExternalPage) {
       ipcRenderer.on("app-fullscreen-changed", listener);
       return () => {
         ipcRenderer.removeListener("app-fullscreen-changed", listener);
+      };
+    },
+
+    // Свои кнопки окна
+    windowMinimize: () => ipcRenderer.invoke("window-minimize"),
+    windowToggleMaximize: () => ipcRenderer.invoke("window-toggle-maximize"),
+    windowIsMaximized: () => ipcRenderer.invoke("window-is-maximized"),
+    windowClose: () => ipcRenderer.invoke("window-close"),
+    onWindowMaximizedChanged: (callback: (value: boolean) => void) => {
+      const listener = (_event: unknown, value: boolean) => callback(value);
+      ipcRenderer.on("window-maximized-changed", listener);
+      return () => {
+        ipcRenderer.removeListener("window-maximized-changed", listener);
       };
     },
 
