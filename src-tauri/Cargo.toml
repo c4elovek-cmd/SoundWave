@@ -28,7 +28,7 @@ axum = { version = "0.8", default-features = false, features = ["json", "tokio",
 rand = "0.9"
 
 [target.'cfg(windows)'.dependencies]
-windows-sys = { version = "0.59", features = ["Win32_Foundation", "Win32_UI_WindowsAndMessaging"] }
+windows-sys = { version = "0.59", features = ["Win32_Foundation", "Win32_UI_WindowsAndMessaging", "Win32_Graphics_Gdi"] }
 reqwest = { version = "0.12", default-features = false, features = [
   "json",
   "rustls-tls",

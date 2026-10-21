@@ -1125,13 +1125,15 @@ pub fn run() {
             handle: std::sync::Mutex::new(None),
         })
         .setup(|app| {
-            // Прозрачное окно: слоёный флаг убирает чёрную рамку по краю,
-            // а скруглённые углы интерфейса показывают рабочий стол.
+            // Окно без рамки: полосу под изменение размера красим в цвет
+            // приложения, а углы срезаем регионом — тогда окно выглядит
+            // скруглённым и без белой каймы.
             if let Some(win) = app.get_webview_window("main") {
                 use tauri::webview::Color;
 
-                let _ = win.set_background_color(Some(Color(0, 0, 0, 0)));
-                transparent::make_layered(&win.as_ref().window());
+                let _ = win.set_background_color(Some(Color(18, 18, 18, 255)));
+                transparent::paint_frame(&win.as_ref().window(), 0x00121212);
+                corners::apply_webview(&win, corners::CORNER_RADIUS);
             }
 
             // Иконка в трее: из неё приложение возвращается и выходит.
@@ -1212,6 +1214,15 @@ pub fn run() {
             set_fullscreen,
         ])
         .on_window_event(|window, event| {
+            // При изменении размера регион окна надо пересоздать,
+            // иначе скругление перестанет совпадать с краями.
+            if let WindowEvent::Resized(_) = event {
+                if window.label() == "main" {
+                    corners::apply(window, corners::CORNER_RADIUS);
+                }
+                return;
+            }
+
             if let WindowEvent::CloseRequested { api, .. } = event {
                 if window.label() != "main" {
                     return;
