@@ -188,6 +188,9 @@ let mainWindow: BrowserWindow | null = null;
 let authWindow: BrowserWindow | null = null;
 let tray: Tray | null = null;
 let agentApiHandle: AgentApiHandle | null = null;
+
+/** Файл обновления уже скачан — можно ставить. */
+let updateDownloaded = false;
 const discord = new DiscordRpc();
 let isQuitting = false;
 
@@ -2247,10 +2250,38 @@ function setupIPC() {  // Получить сохранённые настрой
     }
 
     try {
+      // Файл ещё мог не скачаться — ждём и тогда ставим.
+      if (!updateDownloaded) {
+        await new Promise<void>((resolve, reject) => {
+          const timer = setTimeout(() => {
+            cleanup();
+            reject(new Error("Обновление не скачалось за 5 минут"));
+          }, 5 * 60 * 1000);
+
+          const onDownloaded = () => {
+            cleanup();
+            resolve();
+          };
+          const onError = (e: Error) => {
+            cleanup();
+            reject(e);
+          };
+          const cleanup = () => {
+            clearTimeout(timer);
+            autoUpdater.removeListener("update-downloaded", onDownloaded);
+            autoUpdater.removeListener("error", onError);
+          };
+
+          autoUpdater.on("update-downloaded", onDownloaded);
+          autoUpdater.on("error", onError);
+        });
+      }
+
       autoUpdater.quitAndInstall();
       return { ok: true };
     } catch (e) {
       const message = e instanceof Error ? e.message : "Не удалось установить обновление";
+      log.warn("Установка обновления не удалась:", message);
       return { ok: false, error: message };
     }
   });
@@ -2322,6 +2353,7 @@ if (!hasSingleInstanceLock) {
 
     autoUpdater.on("update-downloaded", (info) => {
       log.info("Обновление скачано:", info.version);
+      updateDownloaded = true;
       mainWindow?.webContents.send("update-downloaded", { version: info.version });
     });
 

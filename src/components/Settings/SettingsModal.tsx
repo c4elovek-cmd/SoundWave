@@ -805,7 +805,7 @@ export default function SettingsModal() {
                 )}
                 {updateState.kind === "available" && (
                   <span className="settings-value">
-                    Доступно обновление {updateState.version} — скачиваем
+                    Доступно обновление {updateState.version}
                   </span>
                 )}
                 {updateState.kind === "downloaded" && (
@@ -819,7 +819,8 @@ export default function SettingsModal() {
                   </span>
                 )}
 
-                {updateState.kind === "downloaded" ? (
+                {updateState.kind === "available" ||
+                updateState.kind === "downloaded" ? (
                   <button
                     className="settings-button"
                     onClick={() => void window.electronAPI?.installUpdate?.()}
