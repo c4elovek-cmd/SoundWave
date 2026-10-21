@@ -4,43 +4,57 @@ import electron from "vite-plugin-electron";
 import renderer from "vite-plugin-electron-renderer";
 import path from "path";
 
+// В режиме Tauri сборка Electron не нужна: собирается только фронтенд.
+// Флаг ставится скриптом `tauri:dev` / `tauri:build`.
+const isTauri = process.env.SOUNDWAVE_TAURI?.trim() === "1";
+
 export default defineConfig({
   plugins: [
     react(),
-    electron([
-      {
-        entry: "electron/main.ts",
-        vite: {
-          build: {
-            outDir: "dist-electron",
-            rollupOptions: {
-              external: ["electron", "electron-store", "electron-log"],
+    ...(isTauri
+      ? []
+      : [
+          electron([
+            {
+              entry: "electron/main.ts",
+              vite: {
+                build: {
+                  outDir: "dist-electron",
+                  rollupOptions: {
+                    external: ["electron", "electron-store", "electron-log"],
+                  },
+                },
+              },
             },
-          },
-        },
-      },
-      {
-        entry: "electron/preload.ts",
-        onstart(options) {
-          options.reload();
-        },
-        vite: {
-          build: {
-            outDir: "dist-electron",
-            // preload грузится в sandbox без ESM — собираем как CommonJS
-            lib: {
+            {
               entry: "electron/preload.ts",
-              formats: ["cjs"],
-              fileName: () => "preload.cjs",
+              onstart(options) {
+                options.reload();
+              },
+              vite: {
+                build: {
+                  outDir: "dist-electron",
+                  // preload грузится в sandbox без ESM — собираем как CommonJS.
+                  // Важно: vite склеивает массивы, и к formats=["cjs"] добавляется
+                  // формат по умолчанию. Если оба писать в один файл, какой
+                  // останется — зависит от порядка сборки, и Electron иногда
+                  // получает файл с ESM-импортом, который не грузится.
+                  // Поэтому каждому формату — своё имя.
+                  lib: {
+                    entry: "electron/preload.ts",
+                    formats: ["cjs"],
+                    fileName: (format) =>
+                      format === "cjs" ? "preload.cjs" : "preload.mjs",
+                  },
+                  rollupOptions: {
+                    external: ["electron"],
+                  },
+                },
+              },
             },
-            rollupOptions: {
-              external: ["electron"],
-            },
-          },
-        },
-      },
-    ]),
-    renderer(),
+          ]),
+          renderer(),
+        ]),
   ],
   resolve: {
     alias: {
@@ -51,5 +65,10 @@ export default defineConfig({
   server: {
     port: 1420,
     strictPort: true,
+    watch: {
+      // Папка сборки Rust меняется во время `cargo build` — за ней
+      // нельзя следить: файлы блокируются запущенным приложением.
+      ignored: ["**/src-tauri/target/**"],
+    },
   },
 });
