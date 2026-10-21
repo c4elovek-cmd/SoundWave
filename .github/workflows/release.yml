@@ -38,9 +38,17 @@ jobs:
           CSC_IDENTITY_AUTO_DISCOVERY: "false"
 
       - name: Прикрепление файлов к релизу
-        uses: softprops/action-gh-release@v2
-        with:
-          files: |
-            release/*.exe
-            release/*.blockmap
-          generate_release_notes: true
+        run: |
+          gh release create "${{ github.ref_name }}" \
+            release/SoundWave-Setup-*.exe \
+            release/SoundWave-Portable-*.exe \
+            release/*.blockmap \
+            --generate-notes \
+            --title "SoundWave ${{ github.ref_name }}" \
+            || gh release upload "${{ github.ref_name }}" \
+            release/SoundWave-Setup-*.exe \
+            release/SoundWave-Portable-*.exe \
+            release/*.blockmap \
+            --clobber
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
