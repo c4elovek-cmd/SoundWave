@@ -5,9 +5,16 @@ export type RepeatSetting = "off" | "all" | "one";
 export type UiStyle = "classic" | "minimal" | "contrast" | "glass" | "threeD" | "bento";
 
 export interface CustomFontInfo {
+  /** Уникальный id файла */
   id: string;
+  /** Название файла, напр. Turret Road Bold */
   name: string;
+  /** CSS-семейство, напр. SWFontTurretRoad */
   family: string;
+  /** Название семейства для интерфейса, напр. Turret Road */
+  display: string;
+  /** Начертание 200–900 */
+  weight: number;
   file: string;
   mime: string;
   dataUrl: string;
@@ -40,6 +47,9 @@ export interface SettingsValues {
   // Локальный API для агентов
   agentApiEnabled: boolean;
   agentApiPort: number;
+
+  // Журнал действий пользователя — для разбора багов
+  actionLog: boolean;
 }
 
 const DEFAULTS: SettingsValues = {
@@ -58,12 +68,14 @@ const DEFAULTS: SettingsValues = {
   shuffleOnStart: false,
   repeatOnStart: "off",
 
-  discordEnabled: false,
+  discordEnabled: true,
   discordClientId: "",
   discordLargeImage: "",
 
   agentApiEnabled: true,
   agentApiPort: 4783,
+
+  actionLog: false,
 };
 
 const STORAGE_KEY = "sw-settings";
@@ -148,6 +160,7 @@ export const useSettingsStore = create<SettingsState>((set, get) => ({
       discordLargeImage: state.discordLargeImage,
       agentApiEnabled: state.agentApiEnabled,
       agentApiPort: state.agentApiPort,
+      actionLog: state.actionLog,
     });
   },
 

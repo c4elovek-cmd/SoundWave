@@ -26,6 +26,7 @@ import { setAuthCookies } from "./lib/soundcloud-api";
 import { startAgentBridge } from "./lib/agentBridge";
 import { syncCustomFonts } from "./lib/fonts";
 import { pushDiscordPresence } from "./lib/discordPresence";
+import { setActionLogEnabled } from "./lib/actionLog";
 import { useSettingsStore } from "./stores/settingsStore";
 import "./components/Layout/Layout.css";
 
@@ -81,6 +82,23 @@ export default function App() {
 
     apply();
     return useSettingsStore.subscribe(apply);
+  }, []);
+
+  // Журнал действий: включается по настройке, пишет в logs/actions.log
+  useEffect(() => {
+    const apply = () => setActionLogEnabled(useSettingsStore.getState().actionLog);
+    apply();
+    return useSettingsStore.subscribe(apply);
+  }, []);
+
+  // Громкость живёт в настройках — так она переживает перезапуск.
+  useEffect(() => {
+    const unsub = usePlayerStore.subscribe((state, prev) => {
+      if (state.volume !== prev.volume) {
+        useSettingsStore.getState().set("volume", state.volume);
+      }
+    });
+    return unsub;
   }, []);
 
   // Стартовое состояние плеера и сайдбара из настроек.

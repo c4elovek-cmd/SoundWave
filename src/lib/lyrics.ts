@@ -78,54 +78,77 @@ function sungIndices(lines: LyricsLine[]): number[] {
  * Возвращает карту «индекс строки Genius → время начала».
  */
 export function alignLrc(lines: LyricsLine[], lrcLines: LrcLine[]): Map<number, number> {
-  const result = new Map<number, number>();
   const candidates = lines
     .map((line, index) => ({ line, index }))
     .filter(({ line }) => !line.isBlank && !line.isSection);
 
-  let cursor = 0;
+  if (candidates.length === 0 || lrcLines.length === 0) return new Map();
 
-  for (const lrcLine of lrcLines) {
-    const target = normalizeLine(lrcLine.text);
-    if (!target) continue;
+  const a = candidates.map(({ line }) => normalizeLine(line.text));
+  const b = lrcLines.map((entry) => normalizeLine(entry.text));
 
-    let found = -1;
+  const n = a.length;
+  const m = b.length;
 
-    // Ищем в пределах следующих строк: LRC может пропускать повторы.
-    for (let i = cursor; i < Math.min(candidates.length, cursor + 12); i++) {
-      const candidate = candidates[i];
-      if (normalizeLine(candidate.line.text) === target) {
-        found = i;
-        break;
-      }
+  // dp[i][j] — длина наибольшей общей подпоследовательности a[i..] и b[j..]
+  const dp: number[][] = Array.from({ length: n + 1 }, () => new Array(m + 1).fill(0));
+
+  for (let i = n - 1; i >= 0; i--) {
+    for (let j = m - 1; j >= 0; j--) {
+      dp[i][j] =
+        a[i] === b[j] ? dp[i + 1][j + 1] + 1 : Math.max(dp[i + 1][j], dp[i][j + 1]);
     }
+  }
 
-    // Иногда LRC режет длинную строку на части — допускаем вхождение.
-    if (found === -1) {
-      for (let i = cursor; i < Math.min(candidates.length, cursor + 12); i++) {
-        const candidate = candidates[i];
-        const normalized = normalizeLine(candidate.line.text);
-        if (
-          normalized.length > 4 &&
-          target.length > 4 &&
-          (normalized.includes(target) || target.includes(normalized))
-        ) {
-          found = i;
-          break;
-        }
-      }
+  const result = new Map<number, number>();
+  const matchedA = new Set<number>();
+  const matchedB = new Set<number>();
+
+  // Восстанавливаем выравнивание
+  let i = 0;
+  let j = 0;
+  while (i < n && j < m) {
+    if (a[i] === b[j]) {
+      result.set(candidates[i].index, lrcLines[j].time);
+      matchedA.add(i);
+      matchedB.add(j);
+      i += 1;
+      j += 1;
+    } else if (dp[i + 1][j] >= dp[i][j + 1]) {
+      i += 1;
+    } else {
+      j += 1;
     }
+  }
 
-    if (found !== -1) {
-      result.set(candidates[found].index, lrcLine.time);
-      cursor = found + 1;
+  // Второй проход: оставшиеся строки ищем нечётко, рядом с ожидаемой позицией.
+  for (let k = 0; k < n; k++) {
+    if (matchedA.has(k)) continue;
+
+    const expected = Math.round((k * m) / Math.max(1, n));
+    for (let offset = -3; offset <= 3; offset++) {
+      const index = expected + offset;
+      if (index < 0 || index >= m || matchedB.has(index)) continue;
+      if (!sameLine(a[k], b[index])) continue;
+
+      result.set(candidates[k].index, lrcLines[index].time);
+      matchedA.add(k);
+      matchedB.add(index);
+      break;
     }
   }
 
   return result;
 }
 
-/** Равномерно распределяет строки между двумя моментами с учётом их длины. */
+/**
+ * Раскладывает строки между двумя известными моментами.
+ *
+ * Промежуток делится на n+1 частей: первая доля — хвост предыдущей строки,
+ * последняя — пауза перед следующей. Благодаря этому промежуточная строка
+ * начинается строго позже предыдущей и не делит с ней одно время — иначе
+ * караоке «перескакивал» через строку.
+ */
 function distribute(
   indices: number[],
   from: number,
@@ -139,9 +162,13 @@ function distribute(
   const total = weights.reduce((sum, weight) => sum + weight, 0);
   const span = Math.max(0.001, to - from);
 
-  let acc = 0;
+  // Средняя доля — это «хвост» предыдущей строки, он же отступ перед первой.
+  const avg = total / indices.length;
+  const denom = total + avg;
+
+  let acc = avg;
   indices.forEach((index, i) => {
-    times.set(index, from + (span * acc) / total);
+    times.set(index, from + (span * acc) / denom);
     acc += weights[i];
   });
 }
@@ -214,15 +241,105 @@ function fillTimings(
 }
 
 /**
- * Главная функция: plain text + (необязательный) LRC + длительность.
- * LRC используется, только если с ним совпала хотя бы половина строк —
- * иначе лучше честная равномерная раскладка, чем чужие тайминги.
+ * Точность синхронизации:
+ * - `exact` — строки LRC совпали с текстом Genius, тайминги настоящие;
+ * - `aligned` — тексты расходятся, но тайминги подобраны по смещению;
+ * - `estimate` — точных данных нет, время распределено по длительности.
  */
-export function buildTimedLyrics(
+export type SyncQuality = "exact" | "aligned" | "estimate";
+
+export interface TimedLyrics {
+  lines: LyricsLine[];
+  quality: SyncQuality;
+}
+
+/** Строки считаются одинаковыми, если совпадают или одна входит в другую. */
+function sameLine(a: string, b: string): boolean {
+  if (!a || !b) return false;
+  if (a === b) return true;
+  if (a.length > 4 && b.includes(a)) return true;
+  if (b.length > 4 && a.includes(b)) return true;
+  return false;
+}
+
+/**
+ * Совмещает LRC со строками Genius по постоянному смещению.
+ *
+ * Нужен, когда тексты отличаются (перевод, другая разбивка на строки), а
+ * тайминги у LRC настоящие: без такого выравнивания мы их теряли и
+ * оценивали время по длительности трека.
+ */
+function alignByOffset(
+  lines: LyricsLine[],
+  lrcLines: LrcLine[]
+): { map: Map<number, number>; matches: number } {
+  const candidates = lines
+    .map((line, index) => ({ line, index }))
+    .filter(({ line }) => !line.isBlank && !line.isSection);
+
+  if (candidates.length === 0 || lrcLines.length === 0) {
+    return { map: new Map(), matches: 0 };
+  }
+
+  const lrcText = lrcLines.map((entry) => normalizeLine(entry.text));
+  const geniusText = candidates.map(({ line }) => normalizeLine(line.text));
+
+  let best: { map: Map<number, number>; matches: number } = {
+    map: new Map(),
+    matches: 0,
+  };
+
+  // 1. Ровно тот же порядок строк, но со сдвигом на несколько строк.
+  for (let offset = -4; offset <= 4; offset++) {
+    const map = new Map<number, number>();
+    let matches = 0;
+
+    for (let i = 0; i < geniusText.length; i++) {
+      const j = i + offset;
+      if (j < 0 || j >= lrcText.length) continue;
+      if (!sameLine(geniusText[i], lrcText[j])) continue;
+
+      map.set(candidates[i].index, lrcLines[j].time);
+      matches += 1;
+    }
+
+    if (matches > best.matches) best = { map, matches };
+  }
+
+  // 2. Пропорциональное совмещение: строк в LRC может быть больше или меньше.
+  const ratio = lrcLines.length / candidates.length;
+  if (Math.abs(ratio - 1) > 0.15) {
+    const map = new Map<number, number>();
+    let matches = 0;
+
+    for (let i = 0; i < geniusText.length; i++) {
+      const j = Math.min(lrcText.length - 1, Math.round(i * ratio));
+      if (j < 0) continue;
+      if (!sameLine(geniusText[i], lrcText[j])) continue;
+
+      map.set(candidates[i].index, lrcLines[j].time);
+      matches += 1;
+    }
+
+    if (matches > best.matches) best = { map, matches };
+  }
+
+  return best;
+}
+
+/**
+ * Главная функция: plain text + (необязательный) LRC + длительность.
+ *
+ * LRC используется, если с ним совпала хотя бы половина строк, — иначе
+ * лучше честная равномерная раскладка, чем чужие тайминги. Если точных
+ * совпадений мало, но структура строк похожа, тайминги всё равно подбираются
+ * по смещению: они настоящие, просто текст немного другой.
+ */
+export function buildTimedLyricsDetailed(
   lyrics: string,
   duration: number,
   lrc?: string | null
-): LyricsLine[] {
+): TimedLyrics {
   const lines = parseLyrics(lyrics);
   const sung = sungIndices(lines);
 
@@ -231,11 +348,31 @@ export function buildTimedLyrics(
     const mapped = alignLrc(lines, lrcLines);
 
     if (mapped.size >= Math.max(3, sung.length * 0.4)) {
-      return fillTimings(lines, mapped, duration);
+      return { lines: fillTimings(lines, mapped, duration), quality: "exact" };
+    }
+
+    // Точных совпадений мало — пробуем подобрать тайминги по смещению.
+    const aligned = alignByOffset(lines, lrcLines);
+    const threshold = Math.max(2, Math.round(sung.length * 0.15));
+
+    if (aligned.matches >= threshold) {
+      return {
+        lines: fillTimings(lines, aligned.map, duration),
+        quality: "aligned",
+      };
     }
   }
 
-  return fillTimings(lines, new Map(), duration);
+  return { lines: fillTimings(lines, new Map(), duration), quality: "estimate" };
+}
+
+/** Только строки — для обратной совместимости. */
+export function buildTimedLyrics(
+  lyrics: string,
+  duration: number,
+  lrc?: string | null
+): LyricsLine[] {
+  return buildTimedLyricsDetailed(lyrics, duration, lrc).lines;
 }
 
 /** Индекс строки, которая звучит в момент time. */

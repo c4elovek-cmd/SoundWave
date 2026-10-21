@@ -208,6 +208,11 @@
   background: #1db954;
 }
 
+/* Тайминги подобраны по смещению: время настоящее, текст отличается */
+.lyrics-sync-dot.aligned {
+  background: #f5a623;
+}
+
 .lyrics-sync-dot.loading {
   background: var(--accent);
   animation: lyrics-pulse 1s ease-in-out infinite;

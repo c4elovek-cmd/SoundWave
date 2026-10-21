@@ -8,6 +8,7 @@ import { usePlayerStore } from "../stores/playerStore";
 import { useAppStore, View } from "../stores/appStore";
 import { scApi, getArtwork } from "./soundcloud-api";
 import { parseLrc } from "./lyrics";
+import { logAction } from "./actionLog";
 import { SCPlaylist, SCTrack, SCUser } from "../types/soundcloud";
 
 interface AgentRequest {
@@ -179,6 +180,8 @@ async function handleRequest(request: AgentRequest): Promise<unknown> {
   const payload = (request.payload && typeof request.payload === "object"
     ? request.payload
     : {}) as Record<string, unknown>;
+
+  logAction("agent.command", { type: request.type });
 
   switch (request.type) {
     case "state":

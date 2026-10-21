@@ -9,6 +9,7 @@
 import { create } from "zustand";
 import { SCTrack } from "../types/soundcloud";
 import { collectWaveCandidates, loadWaveSeed, WaveMode, WaveSeed } from "../lib/wave";
+import { logAction } from "../lib/actionLog";
 import { usePlayerStore } from "./playerStore";
 
 const MODE_KEY = "sw-wave-mode";
@@ -103,6 +104,7 @@ export const useWaveStore = create<WaveState>((set, get) => ({
   start: async () => {
     if (get().loading) return;
 
+    logAction("wave.start", { mode: get().mode });
     set({ loading: true, error: null });
 
     try {
@@ -148,12 +150,14 @@ export const useWaveStore = create<WaveState>((set, get) => ({
   },
 
   restart: async () => {
+    logAction("wave.restart");
     usePlayerStore.getState().setRefill(null);
     set({ active: false });
     await get().start();
   },
 
   stop: () => {
+    logAction("wave.stop");
     const player = usePlayerStore.getState();
     player.setRefill(null);
     player.pause();
@@ -161,12 +165,15 @@ export const useWaveStore = create<WaveState>((set, get) => ({
   },
 
   setMode: (mode) => {
+    logAction("wave.mode", { mode });
     localStorage.setItem(MODE_KEY, mode);
     set({ mode });
   },
 
   dislike: (track) => {
     if (!track) return;
+
+    logAction("wave.dislike", { id: track.id, artist: track.user?.username });
 
     const disliked = [...new Set([...get().disliked, track.id])].slice(-MAX_DISLIKED);
     const artistScores = { ...get().artistScores };

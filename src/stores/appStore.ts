@@ -8,6 +8,7 @@ import {
   themeBase,
   themeDataId,
 } from "../lib/themes";
+import { logAction } from "../lib/actionLog";
 
 export type Theme = string;
 export type View = "home" | "wave" | "search" | "library" | "likes" | "uploads" | "playlist" | "artist";
@@ -78,6 +79,7 @@ export const useAppStore = create<AppState>((set, get) => ({
   customThemes: loadCustomThemes(),
 
   setTheme: (theme) => {
+    logAction("theme", { theme });
     applyTheme(theme, get().customThemes);
     window.electronAPI?.setTheme(theme, themeBase(theme, get().customThemes));
     set({ theme });
@@ -106,7 +108,10 @@ export const useAppStore = create<AppState>((set, get) => ({
   },
 
   view: "home",
-  setView: (view) => set({ view, currentPlaylistId: null, currentArtistId: null }),
+  setView: (view) => {
+    logAction("view", { view });
+    set({ view, currentPlaylistId: null, currentArtistId: null });
+  },
 
   currentPlaylistId: null,
   currentArtistId: null,
@@ -130,6 +135,8 @@ export const useAppStore = create<AppState>((set, get) => ({
   toggleLike: async (track) => {
     const state = get();
     const liked = state.likedTracks.some((item) => item.id === track.id);
+
+    logAction("like", { id: track.id, title: track.title, liked: !liked });
 
     const res = await window.electronAPI?.toggleLike(track.id, !liked);
 

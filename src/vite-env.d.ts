@@ -87,6 +87,8 @@ declare global {
           id: string;
           name: string;
           family: string;
+          display: string;
+          weight: number;
           file: string;
           mime: string;
           dataUrl: string;
@@ -96,14 +98,17 @@ declare global {
         id: string;
         name: string;
         family: string;
+        display: string;
+        weight: number;
         file: string;
         mime: string;
         dataUrl: string;
       } | null>;
-      removeCustomFont: (id: string) => Promise<boolean>;
+      removeCustomFont: (family: string) => Promise<boolean>;
       discordStatus: () => Promise<{
         enabled: boolean;
         clientId: string;
+        builtIn: boolean;
         largeImage: string;
         connected: boolean;
       }>;
@@ -114,6 +119,7 @@ declare global {
       }) => Promise<{
         enabled: boolean;
         clientId: string;
+        builtIn: boolean;
         largeImage: string;
         connected: boolean;
       }>;
@@ -137,6 +143,10 @@ declare global {
         url: string | null;
       }>;
       openUserData: () => Promise<boolean>;
+      logAction: (
+        action: string,
+        details?: Record<string, unknown>
+      ) => Promise<boolean>;
       onAuthSuccess: (callback: (cookies: string) => void) => void;
       onLoggedOut: (callback: () => void) => void;
       onTrayPlayPause: (callback: () => void) => void;

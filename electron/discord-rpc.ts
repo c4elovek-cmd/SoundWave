@@ -161,11 +161,13 @@ export class DiscordRpc {
   private onData(chunk: Buffer | string): void {
     this.buffer = Buffer.concat([this.buffer, Buffer.from(chunk)]);
 
+    // Кадр Discord: [4 байта opcode][4 байта длины][данные].
+    // Порядок именно такой — с обратным Discord отвечает «protocol error».
     while (this.buffer.length >= 8) {
-      const length = this.buffer.readInt32LE(0);
+      const opcode = this.buffer.readInt32LE(0);
+      const length = this.buffer.readInt32LE(4);
       if (this.buffer.length < 8 + length) break;
 
-      const opcode = this.buffer.readInt32LE(4);
       const body = this.buffer.subarray(8, 8 + length).toString("utf8");
       this.buffer = this.buffer.subarray(8 + length);
 
@@ -246,8 +248,8 @@ export class DiscordRpc {
 
     const body = Buffer.from(JSON.stringify(payload), "utf8");
     const header = Buffer.alloc(8);
-    header.writeInt32LE(body.length, 0);
-    header.writeInt32LE(opcode, 4);
+    header.writeInt32LE(opcode, 0);
+    header.writeInt32LE(body.length, 4);
 
     this.socket.write(Buffer.concat([header, body]));
   }

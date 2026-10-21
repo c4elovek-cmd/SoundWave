@@ -11,7 +11,14 @@ import {
   shell,
 } from "electron";
 import path from "path";
-import { copyFileSync, existsSync, mkdirSync, readFileSync, unlinkSync } from "fs";
+import {
+  appendFileSync,
+  copyFileSync,
+  existsSync,
+  mkdirSync,
+  readFileSync,
+  unlinkSync,
+} from "fs";
 import { randomBytes } from "crypto";
 import { fileURLToPath } from "url";
 import Store from "electron-store";
@@ -55,7 +62,7 @@ const store = new Store({
     agentApiEnabled: true,
     scClientId: "",
     customFonts: [] as StoredFont[],
-    discordEnabled: false,
+    discordEnabled: true,
     discordClientId: "",
     discordLargeImage: "",
   },
@@ -83,9 +90,39 @@ const FONT_MIME: Record<string, string> = {
 
 interface StoredFont {
   id: string;
+  /** Название файла для интерфейса, напр. Turret Road Bold */
   name: string;
+  /** Название семейства, напр. Turret Road */
+  display: string;
+  /** CSS-семейство, напр. SWFontTurretRoad */
   family: string;
   file: string;
+  /** Начертание 200–900 */
+  weight: number;
+}
+
+/** Порядок важен: «ExtraBold» должен проверяться раньше «Bold». */
+const FONT_WEIGHTS: [RegExp, number, string][] = [
+  [/-?(extralight|ultralight)$/i, 200, "ExtraLight"],
+  [/-?(extrabold|ultrabold)$/i, 800, "ExtraBold"],
+  [/-?(semibold|demibold)$/i, 600, "SemiBold"],
+  [/-?(black|heavy)$/i, 900, "Black"],
+  [/-?light$/i, 300, "Light"],
+  [/-?medium$/i, 500, "Medium"],
+  [/-?bold$/i, 700, "Bold"],
+  [/-?(regular|book|normal)$/i, 400, "Regular"],
+];
+
+/** Разбирает имя файла: семейство и начертание. */
+function parseFontName(base: string): { display: string; weight: number; suffix: string } {
+  for (const [re, weight, suffix] of FONT_WEIGHTS) {
+    if (re.test(base)) {
+      const display = base.replace(re, "").trim() || base;
+      return { display, weight, suffix };
+    }
+  }
+
+  return { display: base, weight: 400, suffix: "Regular" };
 }
 
 function fontsDir(): string {
@@ -111,6 +148,22 @@ function fontEntry(font: StoredFont) {
   } catch {
     return null;
   }
+}
+
+/**
+ * Client ID приложения Discord «SoundWave».
+ *
+ * Rich Presence без зарегистрированного приложения не работает, поэтому
+ * идентификатор вшит в сборку: пользователю не нужно ничего настраивать —
+ * как в обычных клиентах. Свой Client ID можно указать в настройках.
+ */
+const DEFAULT_DISCORD_CLIENT_ID = "1562164443893211307";
+const DEFAULT_DISCORD_ASSET = "soundwave";
+
+/** Client ID для Discord: свой из настроек, иначе встроенный. */
+function getDiscordClientId(): string {
+  const custom = String(store.get("discordClientId") ?? "").trim();
+  return custom || DEFAULT_DISCORD_CLIENT_ID;
 }
 
 let mainWindow: BrowserWindow | null = null;
@@ -1648,13 +1701,22 @@ function setupIPC() {  // Получить сохранённые настрой
     if (!FONT_EXTENSIONS.includes(ext)) return null;
 
     const base = path.basename(source, path.extname(source));
+    const { display, weight, suffix } = parseFontName(base);
     const id = randomBytes(6).toString("hex");
+    const family = `SWFont${display.replace(/[^\w]+/g, "")}`;
     const file = `${id}-${base.replace(/[^\w.-]+/g, "_")}.${ext}`;
 
     mkdirSync(fontsDir(), { recursive: true });
     copyFileSync(source, path.join(fontsDir(), file));
 
-    const font: StoredFont = { id, name: base, family: `SWFont${id}`, file };
+    const font: StoredFont = {
+      id,
+      name: `${display} ${suffix}`,
+      display,
+      family,
+      file,
+      weight,
+    };
     store.set("customFonts", [
       ...listStoredFonts().filter((item) => item.id !== id),
       font,
@@ -1663,29 +1725,40 @@ function setupIPC() {  // Получить сохранённые настрой
     return fontEntry(font);
   });
 
-  ipcMain.handle("fonts-remove", (_event, id: string) => {
+  // Удалить шрифт: сразу всё семейство со всеми начертаниями
+  ipcMain.handle("fonts-remove", (_event, family: string) => {
     const fonts = listStoredFonts();
-    const font = fonts.find((item) => item.id === id);
-    if (!font) return false;
+    const doomed = fonts.filter((item) => item.family === family);
 
-    try {
-      unlinkSync(path.join(fontsDir(), font.file));
-    } catch {
-      // Файла уже нет — не страшно.
+    if (doomed.length === 0) return false;
+
+    for (const font of doomed) {
+      try {
+        unlinkSync(path.join(fontsDir(), font.file));
+      } catch {
+        // Файла уже нет — не страшно.
+      }
     }
 
-    store.set("customFonts", fonts.filter((item) => item.id !== id));
+    store.set(
+      "customFonts",
+      fonts.filter((item) => item.family !== family)
+    );
     return true;
   });
 
   /* ==================== Discord Rich Presence ==================== */
 
-  ipcMain.handle("discord-status", () => ({
-    enabled: Boolean(store.get("discordEnabled")),
-    clientId: String(store.get("discordClientId") ?? ""),
-    largeImage: String(store.get("discordLargeImage") ?? ""),
-    connected: discord.isConnected,
-  }));
+  ipcMain.handle("discord-status", () => {
+    const custom = String(store.get("discordClientId") ?? "").trim();
+    return {
+      enabled: store.get("discordEnabled") !== false,
+      clientId: getDiscordClientId(),
+      builtIn: !custom,
+      largeImage: String(store.get("discordLargeImage") ?? ""),
+      connected: discord.isConnected,
+    };
+  });
 
   ipcMain.handle(
     "discord-config",
@@ -1703,8 +1776,8 @@ function setupIPC() {  // Получить сохранённые настрой
         store.set("discordLargeImage", String(payload.largeImage).trim());
       }
 
-      const enabled = Boolean(store.get("discordEnabled"));
-      const clientId = String(store.get("discordClientId") ?? "");
+      const enabled = store.get("discordEnabled") !== false;
+      const clientId = getDiscordClientId();
 
       if (enabled && clientId) {
         await discord.connect(clientId);
@@ -1715,6 +1788,7 @@ function setupIPC() {  // Получить сохранённые настрой
       return {
         enabled,
         clientId,
+        builtIn: !String(store.get("discordClientId") ?? "").trim(),
         largeImage: String(store.get("discordLargeImage") ?? ""),
         connected: discord.isConnected,
       };
@@ -1735,7 +1809,9 @@ function setupIPC() {  // Получить сохранённые настрой
           }
         | null
     ) => {
-      if (!store.get("discordEnabled")) return false;
+      if (!store.get("discordEnabled") && store.get("discordEnabled") !== undefined) {
+        return false;
+      }
 
       if (!presence) {
         discord.setActivity(null);
@@ -1747,7 +1823,8 @@ function setupIPC() {  // Получить сохранённые настрой
         state: presence.state,
         largeText: presence.largeText,
         smallText: presence.smallText,
-        largeImageKey: String(store.get("discordLargeImage") ?? "") || undefined,
+        largeImageKey:
+          String(store.get("discordLargeImage") ?? "") || DEFAULT_DISCORD_ASSET,
         largeImageText: presence.largeText,
         startTimestamp: presence.startTimestamp,
       });
@@ -1796,6 +1873,29 @@ function setupIPC() {  // Получить сохранённые настрой
     return true;
   });
 
+  // Журнал действий пользователя: включается в настройках, нужен для разбора багов
+  ipcMain.handle(
+    "log-action",
+    (_event, action: string, details: Record<string, unknown> = {}) => {
+      try {
+        const dir = path.join(app.getPath("userData"), "logs");
+        mkdirSync(dir, { recursive: true });
+
+        const line = JSON.stringify({
+          t: new Date().toISOString(),
+          a: action,
+          ...details,
+        });
+
+        appendFileSync(path.join(dir, "actions.log"), `${line}\n`, "utf8");
+        return true;
+      } catch (e) {
+        log.warn("Не удалось записать действие в журнал:", e);
+        return false;
+      }
+    }
+  );
+
   log.info("IPC handlers зарегистрированы");
 }
 
@@ -1824,9 +1924,9 @@ if (!hasSingleInstanceLock) {
     // если занят — берётся следующий свободный.
     void startAgentApiIfEnabled();
 
-    // Discord Rich Presence — если включён и задан Client ID.
-    if (store.get("discordEnabled")) {
-      const clientId = String(store.get("discordClientId") ?? "");
+    // Discord Rich Presence — если включён, подключаемся сразу.
+    if (store.get("discordEnabled") !== false) {
+      const clientId = getDiscordClientId();
       if (clientId) void discord.connect(clientId);
     }
   });

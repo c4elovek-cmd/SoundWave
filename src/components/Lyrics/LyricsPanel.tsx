@@ -12,8 +12,14 @@ import { usePlayerStore } from "../../stores/playerStore";
 import { useAppStore } from "../../stores/appStore";
 import { useLyricsStore } from "../../stores/lyricsStore";
 import { useSettingsStore } from "../../stores/settingsStore";
-import { buildTimedLyrics, findActiveLine, lineProgress, LyricsLine } from "../../lib/lyrics";
-import { BUILTIN_FONTS, CUSTOM_FONT_PREFIX, fontStack } from "../../lib/fonts";
+import {
+  buildTimedLyricsDetailed,
+  findActiveLine,
+  lineProgress,
+  LyricsLine,
+  SyncQuality,
+} from "../../lib/lyrics";
+import { BUILTIN_FONTS, CUSTOM_FONT_PREFIX, fontFamilies, fontStack } from "../../lib/fonts";
 import "./Lyrics.css";
 
 export default function LyricsPanel() {
@@ -36,13 +42,16 @@ export default function LyricsPanel() {
   const fontStackValue = fontStack(font, customFonts);
   const durationSec = duration > 0 ? duration / 1000 : 0;
 
-  const timedLines = useMemo(
+  const timed = useMemo(
     () =>
       result?.found && result.lyrics
-        ? buildTimedLyrics(result.lyrics, durationSec, synced?.syncedLyrics)
-        : [],
+        ? buildTimedLyricsDetailed(result.lyrics, durationSec, synced?.syncedLyrics)
+        : { lines: [] as LyricsLine[], quality: "estimate" as SyncQuality },
     [result?.found, result?.lyrics, durationSec, synced?.syncedLyrics]
   );
+
+  const timedLines = timed.lines;
+  const syncQuality = timed.quality;
 
   useEffect(() => {
     void load(currentTrack);
@@ -170,16 +179,24 @@ export default function LyricsPanel() {
           {karaoke && (
             <span
               className={`lyrics-sync-dot ${
-                synced?.found ? "exact" : syncLoading ? "loading" : "auto"
+                syncQuality === "exact"
+                  ? "exact"
+                  : syncQuality === "aligned"
+                    ? "aligned"
+                    : syncLoading
+                      ? "loading"
+                      : "auto"
               }`}
               title={
-                synced?.found
-                  ? `Точная синхронизация: ${synced.title ?? "LRCLIB"}${
-                      synced.artist ? ` — ${synced.artist}` : ""
+                syncQuality === "exact"
+                  ? `Точная синхронизация: ${synced?.title ?? "LRCLIB"}${
+                      synced?.artist ? ` — ${synced.artist}` : ""
                     }`
-                  : syncLoading
-                    ? "Ищу точную синхронизацию…"
-                    : "Примерная синхронизация по длительности трека"
+                  : syncQuality === "aligned"
+                    ? "Тайминги LRCLIB подобраны по совпадению строк: текст отличается, но время настоящее"
+                    : syncLoading
+                      ? "Ищу точную синхронизацию…"
+                      : "Примерная синхронизация по длительности трека"
               }
             />
           )}
@@ -198,15 +215,15 @@ export default function LyricsPanel() {
                 </option>
               ))}
 
-              {customFonts.length > 0 && (
+              {fontFamilies(customFonts).length > 0 && (
                 <optgroup label="Свои шрифты">
-                  {customFonts.map((item) => (
+                  {fontFamilies(customFonts).map((item) => (
                     <option
-                      key={item.id}
-                      value={`${CUSTOM_FONT_PREFIX}${item.id}`}
+                      key={item.family}
+                      value={`${CUSTOM_FONT_PREFIX}${item.family}`}
                       style={{ fontFamily: `"${item.family}", sans-serif` }}
                     >
-                      {item.name}
+                      {item.display}
                     </option>
                   ))}
                 </optgroup>

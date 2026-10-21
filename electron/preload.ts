@@ -129,7 +129,7 @@ if (isExternalPage) {
     // Свои шрифты
     listCustomFonts: () => ipcRenderer.invoke("fonts-list"),
     importCustomFont: () => ipcRenderer.invoke("fonts-import"),
-    removeCustomFont: (id: string) => ipcRenderer.invoke("fonts-remove", id),
+    removeCustomFont: (family: string) => ipcRenderer.invoke("fonts-remove", family),
 
     // Discord Rich Presence
     discordStatus: () => ipcRenderer.invoke("discord-status"),
@@ -157,6 +157,10 @@ if (isExternalPage) {
 
     // Папка с данными приложения
     openUserData: () => ipcRenderer.invoke("open-user-data"),
+
+    // Журнал действий пользователя (для разбора багов)
+    logAction: (action: string, details?: Record<string, unknown>) =>
+      ipcRenderer.invoke("log-action", action, details ?? {}),
 
     // Окно
     showWindow: () => ipcRenderer.invoke("show-window"),

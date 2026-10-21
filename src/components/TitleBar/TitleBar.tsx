@@ -1,5 +1,6 @@
 import { useEffect, useState } from "react";
 import { Copy, Minus, Square, X } from "@phosphor-icons/react";
+import { logAction } from "../../lib/actionLog";
 import "./TitleBar.css";
 
 /**
@@ -26,7 +27,10 @@ export default function TitleBar() {
       <div className="titlebar-controls">
         <button
           className="titlebar-btn"
-          onClick={() => void window.electronAPI?.windowMinimize?.()}
+          onClick={() => {
+            logAction("window.minimize");
+            void window.electronAPI?.windowMinimize?.();
+          }}
           title="Свернуть"
           aria-label="Свернуть"
         >
@@ -35,9 +39,10 @@ export default function TitleBar() {
 
         <button
           className="titlebar-btn"
-          onClick={async () =>
-            setMaximized((await window.electronAPI?.windowToggleMaximize?.()) ?? false)
-          }
+          onClick={async () => {
+            logAction("window.maximize");
+            setMaximized((await window.electronAPI?.windowToggleMaximize?.()) ?? false);
+          }}
           title={maximized ? "Восстановить" : "Развернуть"}
           aria-label={maximized ? "Восстановить" : "Развернуть"}
         >
@@ -46,7 +51,10 @@ export default function TitleBar() {
 
         <button
           className="titlebar-btn close"
-          onClick={() => void window.electronAPI?.windowClose?.()}
+          onClick={() => {
+            logAction("window.close");
+            void window.electronAPI?.windowClose?.();
+          }}
           title="Закрыть"
           aria-label="Закрыть"
         >

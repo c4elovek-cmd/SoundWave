@@ -2,6 +2,7 @@ import { create } from "zustand";
 import { SCTrack, RepeatMode } from "../types/soundcloud";
 import Hls from "hls.js";
 import { scApi } from "../lib/soundcloud-api";
+import { logAction } from "../lib/actionLog";
 
 interface PlayerState {
   // Состояние
@@ -80,6 +81,14 @@ export const usePlayerStore = create<PlayerState>((set, get) => ({
     // Новая попытка включения: всё, что придёт по старому токену, игнорируем.
     const token = get().playToken + 1;
     set({ playToken: token, shouldPlay: true });
+
+    logAction("play", {
+      id: track.id,
+      title: track.title,
+      artist: track.user?.username,
+      queue: queue.length,
+      index,
+    });
 
     // Гасим предыдущий поток
     const prevHls = get().hls;
@@ -205,12 +214,15 @@ export const usePlayerStore = create<PlayerState>((set, get) => ({
   pause: () => {
     const { audio } = get();
     // Увеличиваем токен: незавершённая загрузка трека отменится.
+    logAction("pause", { id: get().currentTrack?.id });
     set({ isPlaying: false, shouldPlay: false, playToken: get().playToken + 1 });
     audio?.pause();
   },
 
   resume: () => {
     const { audio, currentTrack, queue, queueIndex } = get();
+
+    logAction("resume", { id: currentTrack?.id });
 
     if (!audio) {
       // Трек ещё грузится или был остановлен — включаем заново.
@@ -233,6 +245,8 @@ export const usePlayerStore = create<PlayerState>((set, get) => ({
     const { queue, queueIndex, repeat, isShuffled, play, refill } = get();
     if (queue.length === 0) return;
 
+    logAction("next", { id: get().currentTrack?.id });
+
     let nextIndex: number;
 
     if (isShuffled) {
@@ -253,6 +267,13 @@ export const usePlayerStore = create<PlayerState>((set, get) => ({
           more = await refill();
         } catch (e) {
           console.error("Не удалось долить очередь:", e);
+          set({ refilling: false });
+          return;
+        }
+
+        // Пока шёл запрос, волну могли остановить или поставить на паузу.
+        // Тогда долитый трек включать нельзя — иначе музыка идёт сама.
+        if (!get().refill || !get().shouldPlay) {
           set({ refilling: false });
           return;
         }
@@ -281,6 +302,8 @@ export const usePlayerStore = create<PlayerState>((set, get) => ({
     const { queue, queueIndex, progress, currentTrack, play } = get();
     if (queue.length === 0) return;
 
+    logAction("prev", { id: currentTrack?.id, progress });
+
     // Если прошло > 3 сек — рестарт, иначе предыдущий
     if (progress > 0.03) {
       get().seek(0);
@@ -297,21 +320,37 @@ export const usePlayerStore = create<PlayerState>((set, get) => ({
     if (!audio) return;
     const total = duration / 1000;
     if (total <= 0) return;
+
+    logAction("seek", { ratio: Math.round(progress * 1000) / 1000, seconds: Math.round(progress * total) });
+
     audio.currentTime = Math.max(0, Math.min(total - 0.1, progress * total));
     set({ progress });
   },
 
   setVolume: (vol: number) => {
-    const { audio } = get();
+    const { audio, isMuted } = get();
+    logAction("volume", { value: Math.round(vol * 100) / 100 });
+
     // Громкость и mute — независимые вещи: применяем громкость всегда,
     // иначе после размута звук остаётся на старом уровне.
-    if (audio) audio.volume = vol;
+    if (audio) {
+      audio.volume = vol;
+
+      // Громкость выше нуля снимает mute — иначе ползунок выглядит
+      // «мёртвым»: значение меняется, а на экране всё равно ноль.
+      if (isMuted && vol > 0) {
+        audio.muted = false;
+        set({ isMuted: false });
+      }
+    }
+
     set({ volume: vol });
     window.electronAPI?.setVolume(vol);
   },
 
   toggleMute: () => {
     const { audio, isMuted, volume } = get();
+    logAction("mute", { muted: !isMuted });
     if (audio) {
       audio.muted = !isMuted;
       if (isMuted) audio.volume = volume;

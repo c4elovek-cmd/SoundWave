@@ -1,6 +1,7 @@
 import { useEffect, useMemo, useState } from "react";
 import { createPortal } from "react-dom";
 import {
+  ArrowCounterClockwise,
   ArrowSquareOut,
   Check,
   Copy,
@@ -21,6 +22,7 @@ import { useSettingsStore, UiStyle } from "../../stores/settingsStore";
 import {
   BUILTIN_FONTS,
   CUSTOM_FONT_PREFIX,
+  fontFamilies,
   fontStack,
   registerFont,
   syncCustomFonts,
@@ -122,6 +124,7 @@ export default function SettingsModal() {
   const [discord, setDiscord] = useState<{
     enabled: boolean;
     clientId: string;
+    builtIn: boolean;
     largeImage: string;
     connected: boolean;
   } | null>(null);
@@ -169,22 +172,23 @@ export default function SettingsModal() {
     const list = await window.electronAPI?.listCustomFonts?.();
     setCustomFonts(list ?? []);
 
+    // Новый шрифт сразу становится выбранным, если до него был встроенный.
     if (!settings.lyricsFont.startsWith(CUSTOM_FONT_PREFIX)) {
-      setSetting("lyricsFont", `${CUSTOM_FONT_PREFIX}${font.id}`);
+      setSetting("lyricsFont", `${CUSTOM_FONT_PREFIX}${font.family}`);
     }
   };
 
-  const removeFont = async (id: string) => {
-    await window.electronAPI?.removeCustomFont?.(id);
+  const removeFont = async (family: string) => {
+    await window.electronAPI?.removeCustomFont?.(family);
 
     for (const face of Array.from(document.fonts)) {
-      if (face.family.includes(id)) document.fonts.delete(face);
+      if (face.family === family) document.fonts.delete(face);
     }
 
     const list = (await window.electronAPI?.listCustomFonts?.()) ?? [];
     setCustomFonts(list);
 
-    if (settings.lyricsFont === `${CUSTOM_FONT_PREFIX}${id}`) {
+    if (settings.lyricsFont === `${CUSTOM_FONT_PREFIX}${family}`) {
       setSetting("lyricsFont", "sans");
     }
   };
@@ -358,15 +362,15 @@ export default function SettingsModal() {
                     </option>
                   ))}
 
-                  {settings.customFonts.length > 0 && (
+                  {fontFamilies(settings.customFonts).length > 0 && (
                     <optgroup label="Свои шрифты">
-                      {settings.customFonts.map((font) => (
+                      {fontFamilies(settings.customFonts).map((item) => (
                         <option
-                          key={font.id}
-                          value={`${CUSTOM_FONT_PREFIX}${font.id}`}
-                          style={{ fontFamily: `"${font.family}", sans-serif` }}
+                          key={item.family}
+                          value={`${CUSTOM_FONT_PREFIX}${item.family}`}
+                          style={{ fontFamily: `"${item.family}", sans-serif` }}
                         >
-                          {font.name}
+                          {item.display}
                         </option>
                       ))}
                     </optgroup>
@@ -418,21 +422,28 @@ export default function SettingsModal() {
               </p>
 
               <div className="settings-font-list">
-                {settings.customFonts.length === 0 && (
+                {fontFamilies(settings.customFonts).length === 0 && (
                   <span className="settings-empty">Своих шрифтов пока нет</span>
                 )}
 
-                {settings.customFonts.map((font) => (
-                  <div key={font.id} className="settings-font-item">
+                {fontFamilies(settings.customFonts).map((item) => (
+                  <div key={item.family} className="settings-font-item">
                     <span
                       className="settings-font-name"
-                      style={{ fontFamily: `"${font.family}", sans-serif` }}
+                      style={{ fontFamily: `"${item.family}", sans-serif` }}
                     >
-                      {font.name}
+                      {item.display}
+                    </span>
+                    <span className="settings-font-weights">
+                      {item.weights
+                        .slice()
+                        .sort((a, b) => a - b)
+                        .map((w) => w)
+                        .join(", ")}
                     </span>
                     <button
                       className="settings-icon-btn"
-                      onClick={() => void removeFont(font.id)}
+                      onClick={() => void removeFont(item.family)}
                       title="Удалить шрифт"
                     >
                       <Trash size={15} />
@@ -513,15 +524,30 @@ export default function SettingsModal() {
 
               <Row
                 label="Client ID"
-                hint="Application ID из раздела General Information"
+                hint={
+                  discord?.builtIn
+                    ? `Встроенный: ${discord.clientId}`
+                    : "Application ID из раздела General Information"
+                }
               >
-                <input
-                  className="settings-input"
-                  value={settings.discordClientId}
-                  placeholder="например 1234567890123456789"
-                  onChange={(e) => setSetting("discordClientId", e.target.value.trim())}
-                  onBlur={(e) => void applyDiscord({ clientId: e.target.value.trim() })}
-                />
+                <div className="settings-inline">
+                  <input
+                    className="settings-input"
+                    value={settings.discordClientId}
+                    placeholder={discord?.clientId ?? "1562164443893211307"}
+                    onChange={(e) => setSetting("discordClientId", e.target.value.trim())}
+                    onBlur={(e) => void applyDiscord({ clientId: e.target.value.trim() })}
+                  />
+                  {settings.discordClientId && (
+                    <button
+                      className="settings-icon-btn"
+                      onClick={() => void applyDiscord({ clientId: "" })}
+                      title="Вернуть встроенный Client ID"
+                    >
+                      <ArrowCounterClockwise size={15} />
+                    </button>
+                  )}
+                </div>
               </Row>
 
               <Row
@@ -538,7 +564,14 @@ export default function SettingsModal() {
               </Row>
 
               <div className="settings-steps">
-                <span className="settings-steps-title">Как получить Client ID</span>
+                <span className="settings-steps-title">
+                  Свой Client ID — необязательно
+                </span>
+                <p className="settings-note">
+                  В сборку уже вшит Client ID приложения SoundWave, поэтому
+                  Rich Presence работает сразу, без настройки. Свой можно
+                  подставить, если хочется другое имя или иконку в профиле:
+                </p>
                 <ol>
                   <li>
                     Открой{" "}
@@ -560,8 +593,8 @@ export default function SettingsModal() {
                     выше
                   </li>
                   <li>
-                    В разделе Rich Presence загрузи картинку и укажи её имя
-                    («soundwave») — тогда в профиле будет обложка
+                    В разделе Rich Presence загрузи картинку с именем{" "}
+                    <code>soundwave</code> — тогда в профиле будет обложка
                   </li>
                 </ol>
               </div>
@@ -581,7 +614,7 @@ export default function SettingsModal() {
                 />
                 {discord?.connected
                   ? "Подключено к Discord"
-                  : !settings.discordClientId
+                  : !discord?.clientId
                     ? "Укажите Client ID — без него Discord не подключится"
                     : "Нет подключения — проверьте, запущен ли Discord"}
               </div>
@@ -682,7 +715,18 @@ export default function SettingsModal() {
               <span className="settings-value">SoundWave {appVersion || "—"}</span>
             </Row>
 
-            <Row label="Папка данных" hint="Кэш текстов, свои шрифты, конфиг">
+            <Row
+              label="Журнал действий"
+              hint="Пишет все нажатия в logs/actions.log — пригодится, чтобы разобрать баг"
+            >
+              <Switch
+                checked={settings.actionLog}
+                onChange={(value) => setSetting("actionLog", value)}
+                label="Журнал действий"
+              />
+            </Row>
+
+            <Row label="Папка данных" hint="Кэш текстов, свои шрифты, конфиг, логи">
               <button
                 className="settings-button"
                 onClick={() => void window.electronAPI?.openUserData?.()}

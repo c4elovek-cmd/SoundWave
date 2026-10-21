@@ -13,7 +13,13 @@ import { usePlayerStore } from "../../stores/playerStore";
 import { useAppStore } from "../../stores/appStore";
 import { useLyricsStore } from "../../stores/lyricsStore";
 import { useSettingsStore } from "../../stores/settingsStore";
-import { buildTimedLyrics, findActiveLine, lineProgress } from "../../lib/lyrics";
+import {
+  buildTimedLyricsDetailed,
+  findActiveLine,
+  lineProgress,
+  LyricsLine,
+  SyncQuality,
+} from "../../lib/lyrics";
 import { fontStack } from "../../lib/fonts";
 import { formatDuration } from "../../lib/soundcloud-api";
 import "./KaraokeFullscreen.css";
@@ -73,13 +79,16 @@ export default function KaraokeFullscreen() {
 
   const durationSec = duration > 0 ? duration / 1000 : 0;
 
-  const timedLines = useMemo(
+  const timed = useMemo(
     () =>
       result?.found && result.lyrics
-        ? buildTimedLyrics(result.lyrics, durationSec, synced?.syncedLyrics)
-        : [],
+        ? buildTimedLyricsDetailed(result.lyrics, durationSec, synced?.syncedLyrics)
+        : { lines: [] as LyricsLine[], quality: "estimate" as SyncQuality },
     [result?.found, result?.lyrics, durationSec, synced?.syncedLyrics]
   );
+
+  const timedLines = timed.lines;
+  const syncQuality = timed.quality;
 
   // Активная строка и полоса прогресса. Полосу обновляем напрямую в DOM,
   // чтобы не перерисовывать весь экран 60 раз в секунду.
@@ -205,11 +214,12 @@ export default function KaraokeFullscreen() {
     ? currentTrack.artwork_url.replace("-large", "-t500x500")
     : "";
 
-  const syncLabel = synced?.found
-    ? "Точная синхронизация"
-    : syncLoading
-      ? "Синхронизация…"
-      : "Примерная синхронизация";
+  const syncLabel =
+    syncQuality === "exact"
+      ? "Точная синхронизация"
+      : syncQuality === "aligned"
+        ? "Синхронизация по LRC"
+        : "Примерная синхронизация";
 
   const showStatus = timedLines.length === 0;
 
