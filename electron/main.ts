@@ -402,6 +402,8 @@ interface GeniusLyricsResult {
   url?: string;
   lyrics?: string;
   error?: string;
+  /** Откуда взят текст: Genius или запасной LRCLIB. */
+  source?: "genius" | "lrclib";
 }
 
 const geniusCache = new Map<string, { value: GeniusLyricsResult; at: number }>();
@@ -513,40 +515,108 @@ function extractGeniusLyrics(html: string): string {
     .trim();
 }
 
+/**
+ * Убирает из названия приписки, которыми перезаливают треки:
+ * «(prod. by X)», «[2024]», «{edit}», «remix» и прочее.
+ */
+function cleanTitle(title: string): string {
+  return title
+    .replace(/\([^()]*\)/g, " ")
+    .replace(/\[[^\]]*\]/g, " ")
+    .replace(/\{[^{}]*\}/g, " ")
+    .replace(/\bprod\.?\s*by\b.*$/i, " ")
+    .replace(/\bmix\b.*$/i, " ")
+    .replace(/[|_]+/g, " ")
+    .replace(/\s{2,}/g, " ")
+    .trim();
+}
+
+/** Варианты названия: исходное, очищенное, часть после тире и без хвоста. */
+function titleVariants(title: string): string[] {
+  const variants = new Set<string>();
+  const add = (value: string) => {
+    const trimmed = value.trim();
+    if (trimmed.length > 1) variants.add(trimmed);
+  };
+
+  add(title);
+
+  const cleaned = cleanTitle(title);
+  add(cleaned);
+
+  // «Артист - Песня»: песня обычно после тире.
+  const parts = cleaned.split(/\s+[-–—]\s+/);
+  if (parts.length > 1) {
+    add(parts[parts.length - 1]);
+    add(parts[0]);
+  }
+
+  // Хвост вроде «remix», «prod», «live», «bootleg».
+  add(
+    cleaned
+      .replace(/\s*\b(remix|prod|edit|version|live|bootleg|mix|demo)\b.*$/i, "")
+      .trim()
+  );
+
+  return [...variants];
+}
+
+/** Варианты имени артиста: без скобок и приписок вроде «[second acc]». */
+function artistVariants(artist: string): string[] {
+  const variants = new Set<string>();
+  const add = (value: string) => {
+    const trimmed = value.trim();
+    if (trimmed.length > 1) variants.add(trimmed);
+  };
+
+  add(artist);
+  add(artist.replace(/\([^()]*\)/g, " ").replace(/\[[^\]]*\]/g, " ").replace(/\s{2,}/g, " ").trim());
+
+  return [...variants];
+}
+
 /** Насколько результат поиска похож на нужный трек. */
-function scoreGeniusSong(song: any, title: string, artist: string): number {
-  const wantTitle = normalizeGeniusText(title);
-  const wantArtist = normalizeGeniusText(artist);
+function scoreGeniusSong(
+  song: any,
+  titles: string[],
+  artists: string[]
+): number {
   const songTitle = normalizeGeniusText(song?.title);
   const songArtist = normalizeGeniusText(song?.primary_artist?.name);
 
   if (!songTitle || !songArtist) return -100;
 
+  const wantTitles = titles.map(normalizeGeniusText).filter(Boolean);
+  const wantArtists = artists.map(normalizeGeniusText).filter(Boolean);
+
   const isTranslation =
     songArtist.startsWith("genius ") &&
     GENIUS_TRANSLATION_MARKERS.some((marker) => songArtist.includes(marker));
-  if (isTranslation && songArtist !== wantArtist) return -100;
+  if (isTranslation && !wantArtists.includes(songArtist)) return -100;
 
   let score = 0;
 
-  if (songTitle === wantTitle) {
-    score += 10;
-  } else if (songTitle.includes(wantTitle) || wantTitle.includes(songTitle)) {
-    score += 6;
-  } else {
-    // Названия в SoundCloud часто содержат лишние приписки — сравниваем по словам.
-    const words = wantTitle.split(" ").filter((word) => word.length > 1);
-    if (words.length > 0) {
-      const matched = words.filter((word) => songTitle.includes(word)).length;
-      score += (matched / words.length) * 3;
+  for (const wantTitle of wantTitles) {
+    if (songTitle === wantTitle) {
+      score = Math.max(score, 10);
+    } else if (songTitle.includes(wantTitle) || wantTitle.includes(songTitle)) {
+      score = Math.max(score, 6);
+    } else {
+      // Названия в SoundCloud часто содержат лишние приписки — сравниваем по словам.
+      const words = wantTitle.split(" ").filter((word) => word.length > 1);
+      if (words.length > 0) {
+        const matched = words.filter((word) => songTitle.includes(word)).length;
+        score = Math.max(score, (matched / words.length) * 3);
+      }
     }
   }
 
-  if (wantArtist && songArtist) {
+  for (const wantArtist of wantArtists) {
+    if (!wantArtist || !songArtist) continue;
     if (songArtist === wantArtist) {
-      score += 8;
+      score = Math.max(score, 8);
     } else if (songArtist.includes(wantArtist) || wantArtist.includes(songArtist)) {
-      score += 4;
+      score = Math.max(score, 4);
     }
   }
 
@@ -566,32 +636,64 @@ async function fetchGenius(url: string, asJson: boolean): Promise<any> {
   return asJson ? res.json() : res.text();
 }
 
-/** Ищет песню на Genius и достаёт из её страницы текст. */
+/**
+ * Ищет песню на Genius и достаёт из её страницы текст.
+ *
+ * Треки часто перезаливают: у копии другое название с приписками
+ * («face - юморсrст (hardteek / hardstyle)»), поэтому ищем по нескольким
+ * вариантам названия и имени артиста.
+ */
 async function findGeniusLyrics(title: string, artist: string): Promise<GeniusLyricsResult> {
-  const query = `${title} ${artist}`.trim();
-  const search = await fetchGenius(
-    `${GENIUS_ORIGIN}/api/search/multi?per_page=5&q=${encodeURIComponent(query)}`,
-    true
-  );
+  const titles = titleVariants(title);
+  const artists = artistVariants(artist);
 
-  const rawHits: any[] = (search?.response?.sections ?? []).flatMap(
-    (section: any) => section?.hits ?? []
-  );
+  const queries: string[] = [];
+  for (const t of titles) {
+    for (const a of artists) {
+      const query = `${t} ${a}`.trim();
+      if (!queries.includes(query)) queries.push(query);
+    }
+  }
 
-  // Genius иногда отдаёт один и тот же результат дважды.
   const seen = new Set<number | string>();
-  const songs = rawHits
-    .map((hit) => hit?.result)
-    .filter((song) => song && song.url && song.title)
-    .filter((song) => {
+  const songs: any[] = [];
+
+  for (const query of queries.slice(0, 4)) {
+    let search: any;
+    try {
+      search = await fetchGenius(
+        `${GENIUS_ORIGIN}/api/search/multi?per_page=5&q=${encodeURIComponent(query)}`,
+        true
+      );
+    } catch (e) {
+      log.warn(`Genius: поиск «${query}» не удался`, e);
+      continue;
+    }
+
+    const rawHits: any[] = (search?.response?.sections ?? []).flatMap(
+      (section: any) => section?.hits ?? []
+    );
+
+    for (const hit of rawHits) {
+      const song = hit?.result;
+      if (!song || !song.url || !song.title) continue;
+
+      // Genius иногда отдаёт один и тот же результат дважды.
       const key = song.id ?? song.url;
-      if (seen.has(key)) return false;
+      if (seen.has(key)) continue;
       seen.add(key);
-      return true;
-    });
+      songs.push(song);
+    }
+
+    // Если нашли уверенное совпадение — дальше не лезем.
+    const best = songs
+      .map((song) => ({ song, score: scoreGeniusSong(song, titles, artists) }))
+      .sort((a, b) => b.score - a.score)[0];
+    if (best && best.score >= 13) break;
+  }
 
   const ranked = songs
-    .map((song) => ({ song, score: scoreGeniusSong(song, title, artist) }))
+    .map((song) => ({ song, score: scoreGeniusSong(song, titles, artists) }))
     .sort((a, b) => b.score - a.score);
 
   // Слишком слабые совпадения пропускаем: лучше честное «не найдено»,
@@ -717,6 +819,81 @@ function scoreLrcTrack(entry: any, title: string, artist: string, durationMs: nu
   return score;
 }
 
+/**
+ * Запасной источник текста — LRCLIB.
+ *
+ * Genius знает не всё: перезалитые треки часто там отсутствуют. LRCLIB
+ * отдаёт текст без таймингов, но зато рядом с ним лежит и синхронизация —
+ * поэтому караоке получается точным.
+ */
+async function getLrclibPlainLyrics(
+  title: string,
+  artist: string
+): Promise<GeniusLyricsResult> {
+  const cacheKey = `plain|${title.toLowerCase()}|${artist.toLowerCase()}`;
+  const cached = geniusCache.get(cacheKey);
+  if (cached && Date.now() - cached.at < GENIUS_CACHE_TTL) {
+    return cached.value;
+  }
+
+  let result: GeniusLyricsResult;
+
+  try {
+    const titles = [title, ...titleVariants(title)].slice(0, 3);
+    const artists = [artist, ...artistVariants(artist)].slice(0, 2);
+
+    let best: { entry: any; score: number } | null = null;
+
+    for (const t of titles) {
+      for (const a of artists) {
+        const url =
+          `${LRCLIB_API}?track_name=${encodeURIComponent(t)}` +
+          `&artist_name=${encodeURIComponent(a)}`;
+
+        const res = await fetch(url, {
+          headers: { "User-Agent": LRCLIB_UA, Accept: "application/json" },
+          signal: AbortSignal.timeout(LRCLIB_TIMEOUT),
+        });
+
+        if (!res.ok) continue;
+
+        const list = await res.json();
+        if (!Array.isArray(list)) continue;
+
+        for (const entry of list) {
+          if (!entry || typeof entry.plainLyrics !== "string") continue;
+          if (entry.plainLyrics.trim().length < 40) continue;
+
+          const score = scoreLrcTrack(entry, title, artist, 0);
+          if (!best || score > best.score) best = { entry, score };
+        }
+
+        if (best && best.score >= 12) break;
+      }
+      if (best && best.score >= 12) break;
+    }
+
+    if (best && best.score >= 4) {
+      result = {
+        found: true,
+        title: best.entry.trackName,
+        artist: best.entry.artistName,
+        url: `https://lrclib.net${best.entry.url ?? ""}`,
+        lyrics: best.entry.plainLyrics,
+        source: "lrclib",
+      };
+    } else {
+      result = { found: false };
+    }
+  } catch (e) {
+    log.warn("LRCLIB: не удалось получить текст", e);
+    return { found: false };
+  }
+
+  geniusCache.set(cacheKey, { value: result, at: Date.now() });
+  return result;
+}
+
 async function getSyncedLyrics(
   title: string,
   artist: string,
@@ -732,30 +909,40 @@ async function getSyncedLyrics(
   let result: SyncedLyricsResult;
 
   try {
-    const url =
-      `${LRCLIB_API}?track_name=${encodeURIComponent(title)}` +
-      `&artist_name=${encodeURIComponent(artist)}`;
+    // Перезалитый трек отличается приписками — пробуем и чистое название.
+    const titles = [title, ...titleVariants(title)].slice(0, 3);
+    const artists = [artist, ...artistVariants(artist)].slice(0, 2);
 
-    const res = await fetch(url, {
-      headers: { "User-Agent": LRCLIB_UA, Accept: "application/json" },
-      signal: AbortSignal.timeout(LRCLIB_TIMEOUT),
-    });
+    let best: { entry: any; score: number } | null = null;
 
-    if (!res.ok) throw new Error(`LRCLIB ответил ${res.status}`);
+    for (const t of titles) {
+      for (const a of artists) {
+        const url =
+          `${LRCLIB_API}?track_name=${encodeURIComponent(t)}` +
+          `&artist_name=${encodeURIComponent(a)}`;
 
-    const list = await res.json();
-    if (!Array.isArray(list)) throw new Error("LRCLIB вернул неожиданный ответ");
+        const res = await fetch(url, {
+          headers: { "User-Agent": LRCLIB_UA, Accept: "application/json" },
+          signal: AbortSignal.timeout(LRCLIB_TIMEOUT),
+        });
 
-    const candidates = list
-      .filter((entry) => entry && typeof entry.syncedLyrics === "string")
-      .filter((entry) => entry.syncedLyrics.trim().length > 20)
-      .map((entry) => ({
-        entry,
-        score: scoreLrcTrack(entry, title, artist, durationMs),
-      }))
-      .sort((a, b) => b.score - a.score);
+        if (!res.ok) continue;
 
-    const best = candidates[0];
+        const list = await res.json();
+        if (!Array.isArray(list)) continue;
+
+        for (const entry of list) {
+          if (!entry || typeof entry.syncedLyrics !== "string") continue;
+          if (entry.syncedLyrics.trim().length <= 20) continue;
+
+          const score = scoreLrcTrack(entry, title, artist, durationMs);
+          if (!best || score > best.score) best = { entry, score };
+        }
+
+        if (best && best.score >= 12) break;
+      }
+      if (best && best.score >= 12) break;
+    }
 
     if (best && best.score >= 6) {
       result = {
@@ -1486,7 +1673,16 @@ function setupIPC() {  // Получить сохранённые настрой
       const artist = String(payload?.artist ?? "").trim();
 
       if (!title) return { found: false, error: "Не указано название трека" };
-      return getGeniusLyrics(title, artist);
+
+      const genius = await getGeniusLyrics(title, artist);
+      if (genius.found) return genius;
+
+      // Genius не знает такой трек — берём текст из LRCLIB.
+      // Там же лежат и тайминги, поэтому караоке будет точным.
+      const fallback = await getLrclibPlainLyrics(title, artist);
+      if (fallback.found) return fallback;
+
+      return genius;
     }
   );
 

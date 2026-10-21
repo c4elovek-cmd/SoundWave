@@ -80,6 +80,24 @@ function saveCache(cache: LyricsCache) {
 // ответ по старому треку не должен перетереть новый.
 let requestId = 0;
 
+/**
+ * Ключ кэша текстов — по названию и артисту, а не по id трека.
+ *
+ * Треки часто перезаливают: у копии новый id, а песня та же. С таким
+ * ключом текст для перезалива берётся из кэша, а не ищется заново.
+ */
+function lyricsKey(track: SCTrack): string {
+  const title = (track.title ?? "")
+    .toLowerCase()
+    .replace(/\s+/g, " ")
+    .trim();
+  const artist = (track.user?.username ?? "")
+    .toLowerCase()
+    .replace(/\s+/g, " ")
+    .trim();
+  return `${title}|${artist}`;
+}
+
 export const useLyricsStore = create<LyricsState>((set, get) => ({
   loading: false,
   trackId: null,
@@ -100,7 +118,7 @@ export const useLyricsStore = create<LyricsState>((set, get) => ({
       set({ synced: null, syncTrackId: null, syncLoading: false });
     }
 
-    const cached = readCache()[String(track.id)];
+    const cached = readCache()[lyricsKey(track)];
     if (cached && isFresh(cached)) {
       set({
         trackId: track.id,
@@ -141,7 +159,7 @@ export const useLyricsStore = create<LyricsState>((set, get) => ({
       // Ошибки сети не кэшируем — при следующем открытии попробуем снова.
       if (!response.error) {
         const cache = readCache();
-        cache[String(track.id)] = { ...response, savedAt: Date.now() };
+        cache[lyricsKey(track)] = { ...response, savedAt: Date.now() };
         saveCache(cache);
       }
     } catch (e) {
