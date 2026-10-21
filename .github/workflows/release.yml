@@ -38,17 +38,19 @@ jobs:
           CSC_IDENTITY_AUTO_DISCOVERY: "false"
 
       - name: Прикрепление файлов к релизу
+        shell: pwsh
         run: |
-          gh release create "${{ github.ref_name }}" \
-            release/SoundWave-Setup-*.exe \
-            release/SoundWave-Portable-*.exe \
-            release/*.blockmap \
-            --generate-notes \
-            --title "SoundWave ${{ github.ref_name }}" \
-            || gh release upload "${{ github.ref_name }}" \
-            release/SoundWave-Setup-*.exe \
-            release/SoundWave-Portable-*.exe \
-            release/*.blockmap \
-            --clobber
+          $tag = "${{ github.ref_name }}"
+          $assets = @(Get-ChildItem -Path release -File | Where-Object { $_.Extension -in ".exe", ".blockmap" } | ForEach-Object { $_.FullName })
+          if (-not $assets) { throw "Артефакты не найдены в release/" }
+
+          gh release view $tag *> $null
+          if ($LASTEXITCODE -eq 0) {
+            Write-Output "Релиз $tag уже есть — обновляем файлы"
+            gh release upload $tag @assets --clobber
+            gh release edit $tag --draft=false --title "SoundWave $tag"
+          } else {
+            gh release create $tag @assets --generate-notes --title "SoundWave $tag"
+          }
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
