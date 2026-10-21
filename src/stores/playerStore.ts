@@ -3,6 +3,7 @@ import { SCTrack, RepeatMode } from "../types/soundcloud";
 import Hls from "hls.js";
 import { scApi } from "../lib/soundcloud-api";
 import { logAction } from "../lib/actionLog";
+import { errorText } from "../lib/errorText";
 
 interface PlayerState {
   // Состояние
@@ -123,7 +124,7 @@ export const usePlayerStore = create<PlayerState>((set, get) => ({
       src = stream.url;
       protocol = stream.protocol;
     } catch (e) {
-      const message = e instanceof Error ? e.message : "Не удалось получить ссылку на трек";
+      const message = errorText(e, "Не удалось получить ссылку на трек");
       set({ error: message, isPlaying: false });
       console.error("Ошибка подготовки трека:", e);
       return;
@@ -159,6 +160,19 @@ export const usePlayerStore = create<PlayerState>((set, get) => ({
       hls.on(Hls.Events.ERROR, (_event, data) => {
         if (!data.fatal) return;
         console.error("Ошибка HLS:", data.type, data.details);
+
+        // Не отдаётся ключ шифрования: у SoundCloud такие треки закрыты DRM
+        // (FairPlay или Common Encryption). Браузер их не расшифровывает,
+        // и повторные попытки только сыпят ошибками — говорим честно.
+        if (data.details === "keyLoadError" || data.details === "keyLoadTimeOut") {
+          hls.destroy();
+          set({
+            error: "Трек защищён DRM — звук недоступен",
+            isPlaying: false,
+            hls: null,
+          });
+          return;
+        }
 
         if (data.type === Hls.ErrorTypes.NETWORK_ERROR) {
           hls.startLoad();
