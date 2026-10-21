@@ -162,6 +162,10 @@ if (isExternalPage) {
     // Папка с данными приложения
     openUserData: () => ipcRenderer.invoke("open-user-data"),
 
+    // Закрывать окно в трей или выходить из приложения
+    setCloseToTray: (value: boolean) =>
+      ipcRenderer.invoke("set-close-to-tray", value),
+
     // Журнал действий пользователя (для разбора багов)
     logAction: (action: string, details?: Record<string, unknown>) =>
       ipcRenderer.invoke("log-action", action, details ?? {}),

@@ -142,6 +142,12 @@ export default function App() {
       useAppStore.getState().setTheme(savedTheme);
     });
 
+    // Настройка «закрывать в трей» живёт в настройках интерфейса, а бэкенду
+    // нужна сразу при старте — сообщаем ему текущее значение.
+    void window.electronAPI.setCloseToTray?.(
+      useSettingsStore.getState().closeToTray
+    );
+
     // Восстанавливаем сохранённую сессию
     window.electronAPI.restoreSession?.().then((res) => {
       if (res?.loggedIn && res.cookies) {
