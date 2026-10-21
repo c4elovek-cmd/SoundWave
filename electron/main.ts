@@ -1100,7 +1100,10 @@ function createWindow() {
     minWidth: 900,
     minHeight: 600,
     title: "SoundWave",
-    backgroundColor: "#121212",
+    // Прозрачный фон нужен, чтобы скруглённые углы окна были видны:
+    // цвет рисует сам интерфейс (.app-shell с border-radius).
+    transparent: true,
+    backgroundColor: "#00000000",
     icon: appIconPath(),
     autoHideMenuBar: true,
     // Своя рамка окна: системный заголовок и кнопки убираем,

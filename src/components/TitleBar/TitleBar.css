@@ -12,6 +12,38 @@
   /* Окно можно перетаскивать за эту полосу */
   -webkit-app-region: drag;
   user-select: none;
+  /* Версия по центру рамки окна */
+  position: relative;
+}
+
+/* Версия и оболочка — по центру тайтбара */
+.titlebar-version {
+  position: absolute;
+  left: 50%;
+  transform: translateX(-50%);
+  display: flex;
+  align-items: baseline;
+  gap: 7px;
+  pointer-events: none;
+  white-space: nowrap;
+}
+
+.titlebar-version-number {
+  font-size: 11.5px;
+  font-weight: 600;
+  letter-spacing: 0.2px;
+  color: var(--text-secondary);
+}
+
+.titlebar-version-runtime {
+  font-size: 10.5px;
+  font-weight: 600;
+  letter-spacing: 0.4px;
+  text-transform: uppercase;
+  color: var(--text-disabled);
+  padding: 1px 6px;
+  border: 1px solid var(--border-subtle);
+  border-radius: var(--radius-full);
 }
 
 .titlebar-brand {

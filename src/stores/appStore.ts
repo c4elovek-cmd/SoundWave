@@ -72,6 +72,11 @@ interface AppState {
   openKaraokeFullscreen: () => void;
   closeKaraokeFullscreen: () => void;
   toggleKaraokeFullscreen: () => void;
+
+  // Версия приложения и оболочка (Rust или Electron) — для надписи в тайтбаре
+  appVersion: string;
+  runtime: string;
+  setAppInfo: (version: string, runtime: string) => void;
 }
 
 export const useAppStore = create<AppState>((set, get) => ({
@@ -175,4 +180,8 @@ export const useAppStore = create<AppState>((set, get) => ({
   closeKaraokeFullscreen: () => set({ karaokeFullscreen: false }),
   toggleKaraokeFullscreen: () =>
     set((s) => ({ karaokeFullscreen: !s.karaokeFullscreen })),
+
+  appVersion: "",
+  runtime: "",
+  setAppInfo: (appVersion, runtime) => set({ appVersion, runtime }),
 }));

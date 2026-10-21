@@ -26,6 +26,7 @@ import { setAuthCookies } from "./lib/soundcloud-api";
 import { startAgentBridge } from "./lib/agentBridge";
 import { syncCustomFonts } from "./lib/fonts";
 import { pushDiscordPresence } from "./lib/discordPresence";
+import { runtimeName } from "./lib/runtime";
 import { setActionLogEnabled } from "./lib/actionLog";
 import { useSettingsStore } from "./stores/settingsStore";
 import "./components/Layout/Layout.css";
@@ -140,6 +141,11 @@ export default function App() {
       // Восстанавливаем тему (включая сохранённую кастомную)
       const savedTheme = typeof cfg.theme === "string" && cfg.theme ? cfg.theme : "dark";
       useAppStore.getState().setTheme(savedTheme);
+
+      // Версия и оболочка — для надписи по центру тайтбара.
+      useAppStore
+        .getState()
+        .setAppInfo(typeof cfg.version === "string" ? cfg.version : "", runtimeName());
     });
 
     // Настройка «закрывать в трей» живёт в настройках интерфейса, а бэкенду
