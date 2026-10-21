@@ -6,11 +6,13 @@
 
 mod agent_api;
 mod config;
+pub mod corners;
 pub mod discord;
 pub mod fonts;
 pub mod lyrics;
 pub mod session;
 pub mod soundcloud;
+pub mod transparent;
 
 use std::collections::HashMap;
 
@@ -51,7 +53,12 @@ async fn sc_request(
     params: HashMap<String, String>,
 ) -> Result<Value, String> {
     let params: Vec<(String, String)> = params.into_iter().collect();
-    state.sc.api(Method::GET, &path, &params).await
+    let mut result = state.sc.api(Method::GET, &path, &params).await?;
+
+    // Помечаем DRM-треки: в очередь такие попадать не должны.
+    soundcloud::mark_drm_tracks(&mut result);
+
+    Ok(result)
 }
 
 /// Прокси к внутреннему API SoundCloud (POST / PUT / DELETE).
@@ -1118,6 +1125,15 @@ pub fn run() {
             handle: std::sync::Mutex::new(None),
         })
         .setup(|app| {
+            // Прозрачное окно: слоёный флаг убирает чёрную рамку по краю,
+            // а скруглённые углы интерфейса показывают рабочий стол.
+            if let Some(win) = app.get_webview_window("main") {
+                use tauri::webview::Color;
+
+                let _ = win.set_background_color(Some(Color(0, 0, 0, 0)));
+                transparent::make_layered(&win.as_ref().window());
+            }
+
             // Иконка в трее: из неё приложение возвращается и выходит.
             if let Err(e) = create_tray(app.handle()) {
                 eprintln!("Не удалось создать трей: {e}");

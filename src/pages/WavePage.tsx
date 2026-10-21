@@ -211,7 +211,7 @@ export default function WavePage() {
                 <div className="wave-row" key={track.id}>
                   <button
                     className="wave-row-art"
-                    onClick={() => play(track, queue, queueIndex + 1 + i)}
+                    onClick={() => play(track, queue, queueIndex + 1 + i, { allowDrm: true })}
                     title="Играть"
                   >
                     {artwork ? <img src={artwork} alt="" /> : <MusicNotes size={18} />}

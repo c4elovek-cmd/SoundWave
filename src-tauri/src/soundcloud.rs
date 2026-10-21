@@ -361,6 +361,44 @@ fn mime_of(transcoding: &Value) -> &str {
         .unwrap_or("")
 }
 
+/// Зашифрован ли поток (FairPlay или Common Encryption).
+fn is_encrypted(transcoding: &Value) -> bool {
+    protocol_of(transcoding).contains("encrypted")
+}
+
+/// Помечает DRM-треки прямо в ответе API.
+///
+/// У SoundCloud для защищённых треков есть только зашифрованные потоки —
+/// их не играет ни один браузер. Флаг ставит интерфейс, чтобы не пускать
+/// такие треки в очередь.
+pub fn mark_drm_tracks(value: &mut Value) {
+    match value {
+        Value::Array(items) => {
+            for item in items {
+                mark_drm_tracks(item);
+            }
+        }
+        Value::Object(map) => {
+            for (_, item) in map.iter_mut() {
+                mark_drm_tracks(item);
+            }
+
+            let transcodings = map
+                .get("media")
+                .and_then(|media| media.get("transcodings"))
+                .and_then(|list| list.as_array())
+                .cloned();
+
+            if let Some(transcodings) = transcodings {
+                if !transcodings.is_empty() && transcodings.iter().all(is_encrypted) {
+                    map.insert("drm".to_string(), Value::Bool(true));
+                }
+            }
+        }
+        _ => {}
+    }
+}
+
 /// Ищет client_id в тексте JS-бандла.
 fn extract_client_id(js: &str) -> Option<String> {
     for pattern in CLIENT_ID_PATTERNS.iter() {

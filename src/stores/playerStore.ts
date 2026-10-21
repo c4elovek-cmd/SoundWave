@@ -31,7 +31,12 @@ interface PlayerState {
   hls: Hls | null;
 
   // Actions
-  play: (track: SCTrack, queue?: SCTrack[], index?: number) => void;
+  play: (
+    track: SCTrack,
+    queue?: SCTrack[],
+    index?: number,
+    options?: { allowDrm?: boolean }
+  ) => void;
   pause: () => void;
   resume: () => void;
   togglePlay: () => void;
@@ -78,8 +83,22 @@ export const usePlayerStore = create<PlayerState>((set, get) => ({
   playToken: 0,
   shouldPlay: false,
 
-  play: async (track, queue = [], index = 0) => {
-    // Новая попытка включения: всё, что придёт по старому токену, игнорируем.
+  play: async (track, queue = [], index = 0, options) => {
+    // Треки с DRM браузер не играет: у SoundCloud для них только
+    // зашифрованные потоки. В обычных списках их пропускаем, в «Моей
+    // волне» оставляем — там пользователь сам решает.
+    const allowDrm = options?.allowDrm ?? false;
+
+    if (track.drm && !allowDrm) {
+      set({
+        error: "Трек защищён DRM — звук недоступен",
+        isPlaying: false,
+      });
+      logAction("skip_drm", { id: track.id, title: track.title });
+      return;
+    }
+
+    // Нов�� попытка включения: всё, что придёт по старому токену, игнорируем.
     const token = get().playToken + 1;
     set({ playToken: token, shouldPlay: true });
 
@@ -90,6 +109,16 @@ export const usePlayerStore = create<PlayerState>((set, get) => ({
       queue: queue.length,
       index,
     });
+
+    // Из очереди DRM-треки тоже убираем — иначе следующий трек не заиграет.
+    let nextQueue = queue;
+    let nextIndex = index;
+
+    if (!allowDrm && queue.some((item) => item.drm)) {
+      nextQueue = queue.filter((item) => !item.drm);
+      const found = nextQueue.findIndex((item) => item.id === track.id);
+      nextIndex = found >= 0 ? found : 0;
+    }
 
     // Гасим предыдущий поток
     const prevHls = get().hls;
@@ -107,8 +136,8 @@ export const usePlayerStore = create<PlayerState>((set, get) => ({
 
     set({
       currentTrack: track,
-      queue: queue.length > 0 ? queue : [track],
-      queueIndex: index,
+      queue: nextQueue.length > 0 ? nextQueue : [track],
+      queueIndex: nextIndex,
       progress: 0,
       duration: 0,
       error: null,
@@ -381,6 +410,12 @@ export const usePlayerStore = create<PlayerState>((set, get) => ({
   },
 
   addToQueue: (track) => {
+    // В очередь DRM-треки не кладём: их всё равно нечем играть.
+    if (track.drm) {
+      set({ error: "Трек защищён DRM — в очередь его не добавить" });
+      logAction("skip_drm", { id: track.id, title: track.title });
+      return;
+    }
     set((state) => ({ queue: [...state.queue, track] }));
   },
 
