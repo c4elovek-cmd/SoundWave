@@ -17,7 +17,9 @@ body,
 
 body {
   font-family: var(--font-family);
-  background: var(--bg-base);
+  /* Фон окна прозрачный: скруглённые углы рисует .app-shell,
+     за ними видно настоящий фон окна (в Rust-версии — про��рачный). */
+  background: transparent;
   color: var(--text-primary);
   font-size: 14px;
   line-height: 1.4;

@@ -1,6 +1,7 @@
 import { useEffect, useState } from "react";
 import { Copy, Minus, Square, X } from "@phosphor-icons/react";
 import { logAction } from "../../lib/actionLog";
+import { useAppStore } from "../../stores/appStore";
 import "./TitleBar.css";
 
 /**
@@ -9,6 +10,8 @@ import "./TitleBar.css";
  */
 export default function TitleBar() {
   const [maximized, setMaximized] = useState(false);
+  const appVersion = useAppStore((state) => state.appVersion);
+  const runtime = useAppStore((state) => state.runtime);
 
   useEffect(() => {
     void window.electronAPI?.windowIsMaximized?.().then(setMaximized);
@@ -23,6 +26,14 @@ export default function TitleBar() {
         <span className="titlebar-mark">S</span>
         <span className="titlebar-name">SoundWave</span>
       </div>
+
+      {/* Версия и оболочка — по центру рамки окна */}
+      {(appVersion || runtime) && (
+        <div className="titlebar-version">
+          <span className="titlebar-version-number">{appVersion || "—"}</span>
+          {runtime && <span className="titlebar-version-runtime">{runtime}</span>}
+        </div>
+      )}
 
       <div className="titlebar-controls">
         <button
