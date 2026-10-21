@@ -12,6 +12,7 @@ pub mod fonts;
 pub mod lyrics;
 pub mod session;
 pub mod soundcloud;
+pub mod sync;
 pub mod transparent;
 
 use std::collections::HashMap;
@@ -1135,6 +1136,9 @@ pub fn run() {
                 transparent::paint_frame(&win.as_ref().window(), 0x00121212);
                 corners::apply_webview(&win, corners::CORNER_RADIUS);
             }
+
+            // Сессия общая с Electron-версией: вход там подхватывается здесь.
+            sync::watch_session(app.handle().clone());
 
             // Иконка в трее: из неё приложение возвращается и выходит.
             if let Err(e) = create_tray(app.handle()) {
