@@ -4,6 +4,7 @@
 //! мост `window.electronAPI` реализован поверх Tauri-команд
 //! (`src/lib/tauriBridge.ts`), поэтому компоненты не трогаем.
 
+mod agent_api;
 mod config;
 pub mod discord;
 pub mod fonts;
@@ -876,6 +877,166 @@ fn focus_main_window(app: AppHandle) {
     }
 }
 
+// --- Локальный API для агентов --------------------------------------------
+
+/// Состояние локального API: общий доступ и запущенный сервер.
+pub struct AgentState {
+    pub api: std::sync::Arc<agent_api::AgentApi>,
+    pub handle: std::sync::Mutex<Option<agent_api::AgentApiHandle>>,
+}
+
+/// Настройки локального API: включение, порт, токен.
+#[tauri::command]
+async fn agent_api_config(
+    app: AppHandle,
+    state: State<'_, AgentState>,
+    config: Option<Value>,
+) -> Result<Value, String> {
+    Ok(configure_agent_api(app, &state, config).await)
+}
+
+/// Перенастройка и перезапуск локального API.
+async fn configure_agent_api(
+    app: AppHandle,
+    state: &AgentState,
+    config: Option<Value>,
+) -> Value {
+    let config = config.unwrap_or(Value::Null);
+
+    if let Some(enabled) = config.get("enabled").and_then(|v| v.as_bool()) {
+        let _ = config::set_value("agentApiEnabled", Value::Bool(enabled));
+    }
+
+    if let Some(port) = config.get("port").and_then(|v| v.as_u64()) {
+        if port > 1024 && port < 65536 {
+            let _ = config::set_value("agentApiPort", Value::from(port));
+        }
+    }
+
+    if config
+        .get("regenerateToken")
+        .and_then(|v| v.as_bool())
+        .unwrap_or(false)
+    {
+        let _ = config::set_value("agentApiToken", Value::String(agent_api::new_token()));
+    }
+
+    let saved = config::load();
+
+    let enabled = saved
+        .get("agentApiEnabled")
+        .and_then(|v| v.as_bool())
+        .unwrap_or(true);
+
+    let port = saved
+        .get("agentApiPort")
+        .and_then(|v| v.as_u64())
+        .unwrap_or(4783) as u16;
+
+    // Токен: генерируем, если его ещё нет.
+    let mut token = saved
+        .get("agentApiToken")
+        .and_then(|v| v.as_str())
+        .unwrap_or("")
+        .to_string();
+
+    if token.is_empty() {
+        token = agent_api::new_token();
+        let _ = config::set_value("agentApiToken", Value::String(token.clone()));
+    }
+
+    state.api.set_token(token.clone());
+
+    // Старый сервер останавливаем, новый поднимаем.
+    if let Ok(mut guard) = state.handle.lock() {
+        if let Some(handle) = guard.take() {
+            handle.close();
+        }
+    }
+    agent_api::remove_info_file();
+
+    let mut url = Value::Null;
+
+    if enabled {
+        match agent_api::start(app, state.api.clone(), port).await {
+            Ok(handle) => {
+                url = Value::String(handle.url.clone());
+                if let Ok(mut guard) = state.handle.lock() {
+                    *guard = Some(handle);
+                }
+            }
+            Err(e) => {
+                eprintln!("Agent API: {e}");
+            }
+        }
+    }
+
+    serde_json::json!({
+        "enabled": enabled,
+        "port": port,
+        "token": token,
+        "url": url,
+    })
+}
+
+/// Ответ интерфейса на команду агента.
+#[tauri::command]
+fn send_agent_response(state: State<'_, AgentState>, response: Value) {
+    agent_api::resolve_response(&state.api, &response);
+}
+
+/// Открыть папку с данными приложения.
+#[tauri::command]
+fn open_user_data(app: AppHandle) -> Result<bool, String> {
+    use tauri_plugin_opener::OpenerExt;
+
+    app.opener()
+        .open_path(config::data_dir().to_string_lossy().to_string(), None::<&str>)
+        .map_err(|e| e.to_string())?;
+    Ok(true)
+}
+
+/// Свернуть окно в трей.
+#[tauri::command]
+fn minimize_to_tray(app: AppHandle) -> Result<bool, String> {
+    if let Some(win) = main_window(&app) {
+        let _ = win.hide();
+    }
+    Ok(true)
+}
+
+/// Медиа-клавиши: play/pause, следующий, предыдущий трек.
+fn register_media_keys(app: &AppHandle) {
+    use tauri_plugin_global_shortcut::{Code, GlobalShortcutExt, Shortcut};
+
+    let bindings = [
+        (Code::MediaPlayPause, "media-play-pause"),
+        (Code::MediaTrackNext, "media-next"),
+        (Code::MediaTrackPrevious, "media-prev"),
+    ];
+
+    for (code, event) in bindings {
+        let shortcut = Shortcut::new(None, code);
+        let event = event.to_string();
+
+        if let Err(e) = app.global_shortcut().on_shortcut(shortcut, move |app, _, _| {
+            let _ = app.emit(&event, ());
+        }) {
+            eprintln!("Медиа-клавиши: не удалось подписаться на {code:?}: {e}");
+            continue;
+        }
+
+        if let Err(e) = app.global_shortcut().register(shortcut) {
+            // Медиа-клавиши в Windows глобальные: если их держит другое
+            // приложение, Windows не даст их занять. Это не поломка —
+            // плеером можно управлять и из окна, и из трея.
+            eprintln!(
+                "Медиа-клавиши: {code:?} недоступны ({e}) — вероятно, их держит другое приложение"
+            );
+        }
+    }
+}
+
 // --- Окно ------------------------------------------------------------------
 
 fn main_window(app: &tauri::AppHandle) -> Option<tauri::WebviewWindow> {
@@ -945,17 +1106,35 @@ pub fn run() {
     tauri::Builder::default()
         .plugin(tauri_plugin_opener::init())
         .plugin(tauri_plugin_dialog::init())
+        .plugin(tauri_plugin_global_shortcut::Builder::new().build())
         .plugin(tauri_plugin_log::Builder::new().build())
         .manage(AppState {
             sc: SoundCloud::new(),
             token_before_login: std::sync::Mutex::new(None),
         })
         .manage(discord::DiscordRpc::new())
+        .manage(AgentState {
+            api: std::sync::Arc::new(agent_api::AgentApi::new()),
+            handle: std::sync::Mutex::new(None),
+        })
         .setup(|app| {
             // Иконка в трее: из неё приложение возвращается и выходит.
             if let Err(e) = create_tray(app.handle()) {
                 eprintln!("Не удалось создать трей: {e}");
             }
+
+            // Медиа-клавиши: play/pause, следующий, предыдущий.
+            register_media_keys(app.handle());
+
+            // Локальный API для агентов.
+            let handle = app.handle().clone();
+            tauri::async_runtime::spawn(async move {
+                let state = match handle.try_state::<AgentState>() {
+                    Some(state) => state,
+                    None => return,
+                };
+                let _ = configure_agent_api(handle.clone(), &state, None).await;
+            });
 
             // Discord Rich Presence подключаем сразу, если он включён.
             let config = config::load();
@@ -984,6 +1163,10 @@ pub fn run() {
             list_custom_fonts,
             import_custom_font,
             remove_custom_font,
+            agent_api_config,
+            send_agent_response,
+            open_user_data,
+            minimize_to_tray,
             discord_status,
             set_discord_config,
             set_discord_presence,

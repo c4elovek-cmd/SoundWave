@@ -18,12 +18,35 @@ export function isTauri(): boolean {
 }
 
 /**
+ * Подписки на события: по имени канала храним функции отписки.
+ *
+ * Это нужно, чтобы `removeAllListeners` действительно отписывал слушателя.
+ * Иначе в режиме разработки React вызывает эффект дважды, и команда
+ * (например, play/pause) срабатывает дважды — то есть никак.
+ */
+const subscriptions = new Map<string, Set<() => void>>();
+
+/**
  * Подписка на событие Tauri с синхронной отпиской.
  * Tauri's listen возвращает Promise, а интерфейс ждёт функцию сразу.
  */
 function subscribe<T>(event: string, callback: (payload: T) => void): () => void {
   let unlisten: (() => void) | null = null;
   let disposed = false;
+
+  const off = () => {
+    disposed = true;
+    unlisten?.();
+    unlisten = null;
+    subscriptions.get(event)?.delete(off);
+  };
+
+  const set = subscriptions.get(event);
+  if (set) {
+    set.add(off);
+  } else {
+    subscriptions.set(event, new Set([off]));
+  }
 
   void listen<T>(event, (e) => callback(e.payload)).then((fn) => {
     if (disposed) {
@@ -33,10 +56,18 @@ function subscribe<T>(event: string, callback: (payload: T) => void): () => void
     unlisten = fn;
   });
 
-  return () => {
-    disposed = true;
-    unlisten?.();
-  };
+  return off;
+}
+
+/** Снимает все подписки на канал. */
+function removeAllListeners(channel: string): void {
+  const set = subscriptions.get(channel);
+  if (!set) return;
+
+  for (const off of [...set]) {
+    off();
+  }
+  subscriptions.delete(channel);
 }
 
 /** Значения параметров приходят как строки или числа — приводим к стокам. */
@@ -157,8 +188,20 @@ export function createTauriBridge(): Window["electronAPI"] {
     openExternal: (url: string) => invoke<boolean>("open_external", { url }),
 
     // --- Локальный API для агентов ---
-    onAgentRequest: () => () => {},
-    sendAgentResponse: () => {},
+    onAgentRequest: (callback: (request: { id: string; type: string; payload?: unknown }) => void) =>
+      subscribe<{ id: string; type: string; payload?: unknown }>(
+        "agent-request",
+        callback
+      ),
+    sendAgentResponse: (response: {
+      id: string;
+      ok: boolean;
+      data?: unknown;
+      error?: string;
+      code?: string;
+    }) => {
+      void invoke("send_agent_response", { response });
+    },
 
     // --- Свои шрифты ---
     listCustomFonts: () =>
@@ -218,15 +261,20 @@ export function createTauriBridge(): Window["electronAPI"] {
     } | null) => invoke<boolean>("set_discord_presence", { presence }),
 
     // --- Настройки локального API ---
-    agentApiConfig: async () => ({
-      enabled: false,
-      port: 4783,
-      token: "",
-      url: null,
-    }),
+    agentApiConfig: (config?: {
+      enabled?: boolean;
+      port?: number;
+      regenerateToken?: boolean;
+    }) =>
+      invoke<{
+        enabled: boolean;
+        port: number;
+        token: string;
+        url: string | null;
+      }>("agent_api_config", { config: config ?? null }),
 
     // --- Папка с данными ---
-    openUserData: async () => false,
+    openUserData: () => invoke<boolean>("open_user_data"),
 
     // Закрывать окно в трей или выходить из приложения
     setCloseToTray: (value: boolean) =>
@@ -238,7 +286,7 @@ export function createTauriBridge(): Window["electronAPI"] {
 
     // --- Окно ---
     showWindow: () => invoke<boolean>("show_window"),
-    minimizeToTray: async () => false,
+    minimizeToTray: () => invoke<boolean>("minimize_to_tray"),
     setFullscreen: (value: boolean) =>
       invoke<boolean>("set_fullscreen", { value }),
     onFullscreenChanged: (callback: (value: boolean) => void) =>
@@ -252,32 +300,24 @@ export function createTauriBridge(): Window["electronAPI"] {
       subscribe<boolean>("window-maximized-changed", callback),
 
     // --- События от бэкенда ---
-    onAuthSuccess: (callback: (cookies: string) => void) => {
-      void subscribe<string>("auth-success", callback);
-    },
-    onLoggedOut: (callback: () => void) => {
-      void subscribe<null>("logged-out", () => callback());
-    },
-    onTrayPlayPause: (callback: () => void) => {
-      void subscribe<null>("tray-play-pause", () => callback());
-    },
-    onTrayNext: (callback: () => void) => {
-      void subscribe<null>("tray-next", () => callback());
-    },
-    onTrayPrev: (callback: () => void) => {
-      void subscribe<null>("tray-prev", () => callback());
-    },
-    onMediaPlayPause: (callback: () => void) => {
-      void subscribe<null>("media-play-pause", () => callback());
-    },
-    onMediaNext: (callback: () => void) => {
-      void subscribe<null>("media-next", () => callback());
-    },
-    onMediaPrev: (callback: () => void) => {
-      void subscribe<null>("media-prev", () => callback());
-    },
+    onAuthSuccess: (callback: (cookies: string) => void) =>
+      subscribe<string>("auth-success", callback),
+    onLoggedOut: (callback: () => void) =>
+      subscribe<null>("logged-out", () => callback()),
+    onTrayPlayPause: (callback: () => void) =>
+      subscribe<null>("tray-play-pause", () => callback()),
+    onTrayNext: (callback: () => void) =>
+      subscribe<null>("tray-next", () => callback()),
+    onTrayPrev: (callback: () => void) =>
+      subscribe<null>("tray-prev", () => callback()),
+    onMediaPlayPause: (callback: () => void) =>
+      subscribe<null>("media-play-pause", () => callback()),
+    onMediaNext: (callback: () => void) =>
+      subscribe<null>("media-next", () => callback()),
+    onMediaPrev: (callback: () => void) =>
+      subscribe<null>("media-prev", () => callback()),
 
-    removeAllListeners: () => {},
+    removeAllListeners: (channel: string) => removeAllListeners(channel),
   };
 
   return bridge as Window["electronAPI"];

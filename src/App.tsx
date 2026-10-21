@@ -188,8 +188,21 @@ export default function App() {
     window.electronAPI.onMediaPrev(() => prev());
 
     return () => {
-      window.electronAPI?.removeAllListeners("auth-success");
-      window.electronAPI?.removeAllListeners("logged-out");
+      // Отписываемся от всех каналов, на которые подписались выше.
+      // В режиме разработки React вызывает эффект дважды — без этого
+      // команда play/pause срабатывала бы дважды, то есть никак.
+      [
+        "auth-success",
+        "logged-out",
+        "tray-play-pause",
+        "tray-next",
+        "tray-prev",
+        "media-play-pause",
+        "media-next",
+        "media-prev",
+      ].forEach((channel) => {
+        window.electronAPI?.removeAllListeners(channel);
+      });
     };
   }, []);
 
