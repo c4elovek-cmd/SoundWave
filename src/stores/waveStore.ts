@@ -140,7 +140,7 @@ export const useWaveStore = create<WaveState>((set, get) => ({
 
       const player = usePlayerStore.getState();
       player.setRefill(() => useWaveStore.getState().refill());
-      player.play(tracks[0], tracks, 0);
+      player.play(tracks[0], tracks, 0, { allowDrm: true });
       set({ active: true, loading: false });
     } catch (e) {
       set({
