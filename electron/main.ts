@@ -25,6 +25,7 @@ import Store from "electron-store";
 import log from "electron-log";
 import { AgentApiHandle, startAgentApi } from "./agent-api";
 import { DiscordRpc } from "./discord-rpc";
+import { importCookiesFromConfig, setConfigValue, watchSessionFile } from "./session-sync";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 
@@ -68,12 +69,23 @@ const store = new Store({
   },
 });
 
+/**
+ * Запись в настройки.
+ *
+ * Файл настроек общий с Rust-версией, поэтому перед записью подтягиваем
+ * его свежее содержимое — иначе electron-store затрёт то, что изменила
+ * другая версия (например, сессию после входа там).
+ */
+function setStore(key: string, value: unknown): void {
+  setConfigValue(store, key, value);
+}
+
 /** Токен локального API создаётся один раз и хранится в конфиге. */
 function getAgentToken(): string {
   let token = String(store.get("agentApiToken") ?? "");
   if (!token) {
     token = randomBytes(24).toString("hex");
-    store.set("agentApiToken", token);
+    setStore("agentApiToken", token);
   }
   return token;
 }
@@ -226,7 +238,7 @@ async function getClientId(): Promise<string> {
             js.match(/"client_id":"([^"]{8,64})"/);
           if (match) {
             clientId = match[1];
-            store.set("scClientId", clientId);
+            setStore("scClientId", clientId);
             log.info(`client_id SoundCloud получен`);
             return clientId;
           }
@@ -238,7 +250,7 @@ async function getClientId(): Promise<string> {
       const inHtml = html.match(/"client_id":"([A-Za-z0-9]{32})"/);
       if (inHtml) {
         clientId = inHtml[1];
-        store.set("scClientId", clientId);
+        setStore("scClientId", clientId);
         return clientId;
       }
 
@@ -1145,7 +1157,7 @@ function createWindow() {
   mainWindow.on("resize", () => {
     if (mainWindow) {
       const [width, height] = mainWindow.getSize();
-      store.set("windowBounds", { width, height });
+      setStore("windowBounds", { width, height });
     }
   });
 
@@ -1280,8 +1292,8 @@ async function finishLogin() {
   }
 
   const cookieHeader = cookies.map((c) => `${c.name}=${c.value}`).join("; ");
-  store.set("scCookies", cookieHeader);
-  store.set("loggedIn", true);
+  setStore("scCookies", cookieHeader);
+  setStore("loggedIn", true);
 
   mainWindow?.webContents.send("auth-success", cookieHeader);
   authWindow.close();
@@ -1494,7 +1506,7 @@ function setupIPC() {  // Получить сохранённые настрой
 
   // Сохранить тему
   ipcMain.handle("set-theme", (_event, theme: string, base?: string) => {
-    store.set("theme", theme);
+    setStore("theme", theme);
     // Фон окна совпадает с фоном приложения — тогда скруглённые углы
     // не выделяются тёмной рамкой.
     if (base && mainWindow && !mainWindow.isDestroyed()) {
@@ -1505,7 +1517,7 @@ function setupIPC() {  // Получить сохранённые настрой
 
   // Сохранить громкость
   ipcMain.handle("set-volume", (_event, volume: number) => {
-    store.set("volume", volume);
+    setStore("volume", volume);
     return true;
   });
 
@@ -1830,6 +1842,10 @@ function setupIPC() {  // Получить сохранённые настрой
 
   // После рестарта — проверяем, жила ли сессия в разделе persist:soundcloud
   ipcMain.handle("restore-session", async () => {
+    // Сессия могла остаться с прошлого запуска или появиться в Rust-версии:
+    // в этом случае подкладываем cookies из общего файла настроек.
+    await importCookiesFromConfig();
+
     const cookies = await session.fromPartition(SC_PARTITION).cookies.get({ domain: ".soundcloud.com" });
     const hasToken = cookies.some((c) => c.name === "oauth_token");
     const cookieHeader = cookies.map((c) => `${c.name}=${c.value}`).join("; ");
@@ -1837,12 +1853,12 @@ function setupIPC() {  // Получить сохранённые настрой
     const loggedIn = hasToken && Boolean(cookieHeader);
 
     if (loggedIn) {
-      store.set("loggedIn", true);
-      store.set("scCookies", cookieHeader);
+      setStore("loggedIn", true);
+      setStore("scCookies", cookieHeader);
       mainWindow?.webContents.send("auth-success", cookieHeader);
     } else {
-      store.set("loggedIn", false);
-      store.set("scCookies", null);
+      setStore("loggedIn", false);
+      setStore("scCookies", null);
     }
 
     return { loggedIn, cookies: loggedIn ? cookieHeader : "" };
@@ -1901,8 +1917,8 @@ function setupIPC() {  // Получить сохранённые настрой
     }
 
     const cookieHeader = await getCookieHeader();
-    store.set("scCookies", cookieHeader);
-    store.set("loggedIn", true);
+    setStore("scCookies", cookieHeader);
+    setStore("loggedIn", true);
     mainWindow?.webContents.send("auth-success", cookieHeader);
     authWindow?.close();
     authWindow = null;
@@ -1924,8 +1940,8 @@ function setupIPC() {  // Получить сохранённые настрой
 
   // Выход: чистим cookies именно нашего раздела сессии
   ipcMain.handle("logout", async () => {
-    store.set("loggedIn", false);
-    store.set("scCookies", null);
+    setStore("loggedIn", false);
+    setStore("scCookies", null);
     try {
       const ses = session.fromPartition(SC_PARTITION);
       await ses.clearStorageData({ storages: ["cookies"] });
@@ -2023,7 +2039,7 @@ function setupIPC() {  // Получить сохранённые настрой
       file,
       weight,
     };
-    store.set("customFonts", [
+    setStore("customFonts", [
       ...listStoredFonts().filter((item) => item.id !== id),
       font,
     ]);
@@ -2046,7 +2062,7 @@ function setupIPC() {  // Получить сохранённые настрой
       }
     }
 
-    store.set(
+    setStore(
       "customFonts",
       fonts.filter((item) => item.family !== family)
     );
@@ -2073,13 +2089,13 @@ function setupIPC() {  // Получить сохранённые настрой
       payload?: { enabled?: boolean; clientId?: string; largeImage?: string }
     ) => {
       if (payload?.enabled !== undefined) {
-        store.set("discordEnabled", Boolean(payload.enabled));
+        setStore("discordEnabled", Boolean(payload.enabled));
       }
       if (payload?.clientId !== undefined) {
-        store.set("discordClientId", String(payload.clientId).trim());
+        setStore("discordClientId", String(payload.clientId).trim());
       }
       if (payload?.largeImage !== undefined) {
-        store.set("discordLargeImage", String(payload.largeImage).trim());
+        setStore("discordLargeImage", String(payload.largeImage).trim());
       }
 
       const enabled = store.get("discordEnabled") !== false;
@@ -2153,18 +2169,18 @@ function setupIPC() {  // Получить сохранённые настрой
       payload?: { enabled?: boolean; port?: number; regenerateToken?: boolean }
     ) => {
       if (payload?.enabled !== undefined) {
-        store.set("agentApiEnabled", Boolean(payload.enabled));
+        setStore("agentApiEnabled", Boolean(payload.enabled));
       }
 
       if (payload?.port !== undefined) {
         const port = Number(payload.port);
         if (Number.isFinite(port) && port > 1024 && port < 65536) {
-          store.set("agentApiPort", Math.round(port));
+          setStore("agentApiPort", Math.round(port));
         }
       }
 
       if (payload?.regenerateToken) {
-        store.set("agentApiToken", randomBytes(24).toString("hex"));
+        setStore("agentApiToken", randomBytes(24).toString("hex"));
       }
 
       await restartAgentApi();
@@ -2187,7 +2203,7 @@ function setupIPC() {  // Получить сохранённые настрой
   // Журнал действий пользователя: включается в настройках, нужен для разбора багов
   // Закрывать окно в трей или выходить из приложения
   ipcMain.handle("set-close-to-tray", (_event, value: boolean) => {
-    store.set("closeToTray", Boolean(value));
+    setStore("closeToTray", Boolean(value));
     log.info("Закрывать окно в трей:", value ? "включено" : "выключено");
     return true;
   });
@@ -2247,6 +2263,32 @@ if (!hasSingleInstanceLock) {
       const clientId = getDiscordClientId();
       if (clientId) void discord.connect(clientId);
     }
+
+    // Сессия общая с Rust-версией: если там выполнили вход, подхватываем
+    // его здесь, и наоборот — вход в этой версии увидит Rust.
+    void importCookiesFromConfig().then((imported) => {
+      if (!imported) return;
+      void session.fromPartition(SC_PARTITION)
+        .cookies.get({ domain: ".soundcloud.com" })
+        .then((cookies) => {
+          const header = cookies.map((c) => `${c.name}=${c.value}`).join("; ");
+          if (header) {
+            setStore("scCookies", header);
+            setStore("loggedIn", true);
+            mainWindow?.webContents.send("auth-success", header);
+          }
+        });
+    });
+
+    watchSessionFile(store, (cookieHeader) => {
+      if (!cookieHeader) {
+        // В другой версии вышел из аккаунта — выходим и здесь.
+        setStore("loggedIn", false);
+        mainWindow?.webContents.send("logged-out");
+        return;
+      }
+      mainWindow?.webContents.send("auth-success", cookieHeader);
+    });
   });
 }
 
