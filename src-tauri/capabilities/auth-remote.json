@@ -1,0 +1,10 @@
+{
+  "$schema": "../gen/schemas/desktop-schema.json",
+  "identifier": "auth-remote",
+  "description": "Минимальные права для страницы soundcloud.com в окне входа",
+  "windows": ["auth"],
+  "remote": {
+    "urls": ["https://soundcloud.com/*", "https://*.soundcloud.com/*"]
+  },
+  "permissions": ["core:default"]
+}

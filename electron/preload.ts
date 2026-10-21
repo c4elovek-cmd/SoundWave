@@ -166,6 +166,31 @@ if (isExternalPage) {
     setCloseToTray: (value: boolean) =>
       ipcRenderer.invoke("set-close-to-tray", value),
 
+    // Автообновление
+    checkForUpdates: () => ipcRenderer.invoke("check-for-updates"),
+    installUpdate: () => ipcRenderer.invoke("install-update"),
+    onUpdateAvailable: (callback: (info: { version: string }) => void) => {
+      const listener = (_event: unknown, info: { version: string }) => callback(info);
+      ipcRenderer.on("update-available", listener);
+      return () => {
+        ipcRenderer.removeListener("update-available", listener);
+      };
+    },
+    onUpdateDownloaded: (callback: (info: { version: string }) => void) => {
+      const listener = (_event: unknown, info: { version: string }) => callback(info);
+      ipcRenderer.on("update-downloaded", listener);
+      return () => {
+        ipcRenderer.removeListener("update-downloaded", listener);
+      };
+    },
+    onUpdateError: (callback: (info: { message: string }) => void) => {
+      const listener = (_event: unknown, info: { message: string }) => callback(info);
+      ipcRenderer.on("update-error", listener);
+      return () => {
+        ipcRenderer.removeListener("update-error", listener);
+      };
+    },
+
     // Журнал действий пользователя (для разбора багов)
     logAction: (action: string, details?: Record<string, unknown>) =>
       ipcRenderer.invoke("log-action", action, details ?? {}),

@@ -1,0 +1,103 @@
+name: Release Tauri
+
+# Сборка версии на Rust (Tauri v2).
+# Тег обычный (v*): в релизе лежат обе версии — Rust и Electron, —
+# чтобы автообновление находило и .sig/latest.json, и latest.yml.
+on:
+  push:
+    tags:
+      - "v*"
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    name: Сборка установщика Windows (Rust)
+    runs-on: windows-latest
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+
+      - name: Установка зависимостей
+        run: npm ci
+
+      - name: Проверка типов
+        run: npx tsc --noEmit
+
+      - name: Установка Rust
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Кэш сборки Rust
+        uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: src-tauri
+
+      - name: Сборка и упаковка
+        run: npm run tauri:build
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Подпись обновления
+        shell: pwsh
+        run: |
+          $installer = Get-ChildItem "src-tauri/target/release/bundle/nsis/*.exe" | Sort-Object LastWriteTime -Descending | Select-Object -First 1
+          if (-not $installer) { throw "Инсталлятор не найден" }
+          npx tauri signer sign $installer.FullName
+        env:
+          TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
+
+      - name: Файл обновления latest.json
+        shell: pwsh
+        run: |
+          $tag = "${{ github.ref_name }}"
+          $installer = Get-ChildItem "src-tauri/target/release/bundle/nsis/*.exe" | Sort-Object LastWriteTime -Descending | Select-Object -First 1
+          $signature = (Get-Content "$($installer.FullName).sig" -Raw).Trim()
+          $version = (Get-Content "src-tauri/tauri.conf.json" -Raw | ConvertFrom-Json).version
+
+          $info = @{
+            version = $version
+            notes = "SoundWave $version на Rust (Tauri v2)"
+            pub_date = (Get-Date).ToUniversalTime().ToString("yyyy-MM-ddTHH:mm:ss.000Z")
+            platforms = @{
+              "windows-x86_64" = @{
+                signature = $signature
+                url = "https://github.com/$env:GITHUB_REPOSITORY/releases/download/$tag/$($installer.Name)"
+              }
+            }
+          }
+
+          $info | ConvertTo-Json -Depth 6 | Set-Content "src-tauri/target/release/bundle/nsis/latest.json" -Encoding UTF8
+          Write-Output "latest.json готов для версии $version"
+
+      - name: Прикрепление файлов к релизу
+        shell: pwsh
+        run: |
+          $tag = "${{ github.ref_name }}"
+          $assets = @(Get-ChildItem -Path "src-tauri/target/release/bundle/nsis" -File | ForEach-Object { $_.FullName })
+          if (-not $assets) { throw "Артефакты не найдены" }
+
+          gh release view $tag *> $null
+          if ($LASTEXITCODE -eq 0) {
+            Write-Output "Релиз $tag уже есть — обновляем файлы"
+            gh release upload $tag @assets --clobber
+            gh release edit $tag --draft=false --title "SoundWave $tag"
+          } else {
+            gh release create $tag @assets --generate-notes --title "SoundWave $tag"
+          }
+
+          $drafts = gh api "repos/$env:GITHUB_REPOSITORY/releases" --jq ".[] | select(.draft == true and .tag_name == `"$tag`") | .id"
+          foreach ($id in $drafts) {
+            Write-Output "Удаляем черновик $id"
+            gh api -X DELETE "repos/$env:GITHUB_REPOSITORY/releases/$id"
+          }
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}

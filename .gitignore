@@ -36,3 +36,4 @@ desktop.ini
 *.png
 !docs/**/*.png
 !resources/*.png
+!src-tauri/icons/**/*.png

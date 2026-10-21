@@ -23,8 +23,15 @@ import { randomBytes } from "crypto";
 import { fileURLToPath } from "url";
 import Store from "electron-store";
 import log from "electron-log";
+import { autoUpdater } from "electron-updater";
 import { AgentApiHandle, startAgentApi } from "./agent-api";
 import { DiscordRpc } from "./discord-rpc";
+import {
+  clearSessionCookies,
+  importCookiesFromConfig,
+  setConfigValue,
+  watchSessionFile,
+} from "./session-sync";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 
@@ -68,12 +75,23 @@ const store = new Store({
   },
 });
 
+/**
+ * Запись в настройки.
+ *
+ * Файл настроек общий с Rust-версией, поэтому перед записью подтягиваем
+ * его свежее содержимое — иначе electron-store затрёт то, что изменила
+ * другая версия (например, сессию после входа там).
+ */
+function setStore(key: string, value: unknown): void {
+  setConfigValue(store, key, value);
+}
+
 /** Токен локального API создаётся один раз и хранится в конфиге. */
 function getAgentToken(): string {
   let token = String(store.get("agentApiToken") ?? "");
   if (!token) {
     token = randomBytes(24).toString("hex");
-    store.set("agentApiToken", token);
+    setStore("agentApiToken", token);
   }
   return token;
 }
@@ -170,6 +188,9 @@ let mainWindow: BrowserWindow | null = null;
 let authWindow: BrowserWindow | null = null;
 let tray: Tray | null = null;
 let agentApiHandle: AgentApiHandle | null = null;
+
+/** Файл обновления уже скачан — можно ставить. */
+let updateDownloaded = false;
 const discord = new DiscordRpc();
 let isQuitting = false;
 
@@ -226,7 +247,7 @@ async function getClientId(): Promise<string> {
             js.match(/"client_id":"([^"]{8,64})"/);
           if (match) {
             clientId = match[1];
-            store.set("scClientId", clientId);
+            setStore("scClientId", clientId);
             log.info(`client_id SoundCloud получен`);
             return clientId;
           }
@@ -238,7 +259,7 @@ async function getClientId(): Promise<string> {
       const inHtml = html.match(/"client_id":"([A-Za-z0-9]{32})"/);
       if (inHtml) {
         clientId = inHtml[1];
-        store.set("scClientId", clientId);
+        setStore("scClientId", clientId);
         return clientId;
       }
 
@@ -1145,7 +1166,7 @@ function createWindow() {
   mainWindow.on("resize", () => {
     if (mainWindow) {
       const [width, height] = mainWindow.getSize();
-      store.set("windowBounds", { width, height });
+      setStore("windowBounds", { width, height });
     }
   });
 
@@ -1280,8 +1301,8 @@ async function finishLogin() {
   }
 
   const cookieHeader = cookies.map((c) => `${c.name}=${c.value}`).join("; ");
-  store.set("scCookies", cookieHeader);
-  store.set("loggedIn", true);
+  setStore("scCookies", cookieHeader);
+  setStore("loggedIn", true);
 
   mainWindow?.webContents.send("auth-success", cookieHeader);
   authWindow.close();
@@ -1494,20 +1515,18 @@ function setupIPC() {  // Получить сохранённые настрой
 
   // Сохранить тему
   ipcMain.handle("set-theme", (_event, theme: string, base?: string) => {
-    store.set("theme", theme);
+    setStore("theme", theme);
     // Фон окна совпадает с фоном приложения — тогда скруглённые углы
     // не выделяются тёмной рамкой.
     if (base && mainWindow && !mainWindow.isDestroyed()) {
-      // Фон окна не трогаем: окно прозрачное, цвет рисует сам интерфейс.
-// Непрозрачный фон здесь отменял бы прозрачность и ломал скруглённые углы.
-      mainWindow.setBackgroundColor("#00000000");
+      mainWindow.setBackgroundColor(base === "light" ? "#ffffff" : "#121212");
     }
     return true;
   });
 
   // Сохранить громкость
   ipcMain.handle("set-volume", (_event, volume: number) => {
-    store.set("volume", volume);
+    setStore("volume", volume);
     return true;
   });
 
@@ -1638,6 +1657,34 @@ function setupIPC() {  // Получить сохранённые настрой
   );
 
   /**
+   * Помечает DRM-треки прямо в ответе API.
+   *
+   * У SoundCloud для защищённых треков есть только зашифрованные потоки —
+   * их не играет ни один браузер. Флаг ставит интерфейс, чтобы не пускать
+   * такие треки в очередь.
+   */
+  function markDrmTracks(value: any): void {
+    if (Array.isArray(value)) {
+      value.forEach(markDrmTracks);
+      return;
+    }
+    if (!value || typeof value !== "object") return;
+
+    for (const item of Object.values(value)) {
+      markDrmTracks(item);
+    }
+
+    const transcodings = value?.media?.transcodings;
+    if (
+      Array.isArray(transcodings) &&
+      transcodings.length > 0 &&
+      transcodings.every((t) => String(t?.format?.protocol ?? "").includes("encrypted"))
+    ) {
+      value.drm = true;
+    }
+  }
+
+  /**
    * Прокси к внутреннему API SoundCloud.
    * Запросы идут из main-процесса: там нет CORS-ограничений и можно передать Cookie,
    * который браузер в renderer обрезает как запрещённый заголовок.
@@ -1670,7 +1717,10 @@ function setupIPC() {  // Получить сохранённые настрой
       }
 
       try {
-        return JSON.parse(text);
+        const data = JSON.parse(text);
+        // Помечаем DRM-треки: в очередь такие попадать не должны.
+        markDrmTracks(data);
+        return data;
       } catch {
         return text;
       }
@@ -1801,6 +1851,10 @@ function setupIPC() {  // Получить сохранённые настрой
 
   // После рестарта — проверяем, жила ли сессия в разделе persist:soundcloud
   ipcMain.handle("restore-session", async () => {
+    // Сессия могла остаться с прошлого запуска или появиться в Rust-версии:
+    // в этом случае подкладываем cookies из общего файла настроек.
+    await importCookiesFromConfig();
+
     const cookies = await session.fromPartition(SC_PARTITION).cookies.get({ domain: ".soundcloud.com" });
     const hasToken = cookies.some((c) => c.name === "oauth_token");
     const cookieHeader = cookies.map((c) => `${c.name}=${c.value}`).join("; ");
@@ -1808,12 +1862,12 @@ function setupIPC() {  // Получить сохранённые настрой
     const loggedIn = hasToken && Boolean(cookieHeader);
 
     if (loggedIn) {
-      store.set("loggedIn", true);
-      store.set("scCookies", cookieHeader);
+      setStore("loggedIn", true);
+      setStore("scCookies", cookieHeader);
       mainWindow?.webContents.send("auth-success", cookieHeader);
     } else {
-      store.set("loggedIn", false);
-      store.set("scCookies", null);
+      setStore("loggedIn", false);
+      setStore("scCookies", null);
     }
 
     return { loggedIn, cookies: loggedIn ? cookieHeader : "" };
@@ -1872,8 +1926,8 @@ function setupIPC() {  // Получить сохранённые настрой
     }
 
     const cookieHeader = await getCookieHeader();
-    store.set("scCookies", cookieHeader);
-    store.set("loggedIn", true);
+    setStore("scCookies", cookieHeader);
+    setStore("loggedIn", true);
     mainWindow?.webContents.send("auth-success", cookieHeader);
     authWindow?.close();
     authWindow = null;
@@ -1895,8 +1949,8 @@ function setupIPC() {  // Получить сохранённые настрой
 
   // Выход: чистим cookies именно нашего раздела сессии
   ipcMain.handle("logout", async () => {
-    store.set("loggedIn", false);
-    store.set("scCookies", null);
+    setStore("loggedIn", false);
+    setStore("scCookies", null);
     try {
       const ses = session.fromPartition(SC_PARTITION);
       await ses.clearStorageData({ storages: ["cookies"] });
@@ -1994,7 +2048,7 @@ function setupIPC() {  // Получить сохранённые настрой
       file,
       weight,
     };
-    store.set("customFonts", [
+    setStore("customFonts", [
       ...listStoredFonts().filter((item) => item.id !== id),
       font,
     ]);
@@ -2017,7 +2071,7 @@ function setupIPC() {  // Получить сохранённые настрой
       }
     }
 
-    store.set(
+    setStore(
       "customFonts",
       fonts.filter((item) => item.family !== family)
     );
@@ -2044,13 +2098,13 @@ function setupIPC() {  // Получить сохранённые настрой
       payload?: { enabled?: boolean; clientId?: string; largeImage?: string }
     ) => {
       if (payload?.enabled !== undefined) {
-        store.set("discordEnabled", Boolean(payload.enabled));
+        setStore("discordEnabled", Boolean(payload.enabled));
       }
       if (payload?.clientId !== undefined) {
-        store.set("discordClientId", String(payload.clientId).trim());
+        setStore("discordClientId", String(payload.clientId).trim());
       }
       if (payload?.largeImage !== undefined) {
-        store.set("discordLargeImage", String(payload.largeImage).trim());
+        setStore("discordLargeImage", String(payload.largeImage).trim());
       }
 
       const enabled = store.get("discordEnabled") !== false;
@@ -2124,18 +2178,18 @@ function setupIPC() {  // Получить сохранённые настрой
       payload?: { enabled?: boolean; port?: number; regenerateToken?: boolean }
     ) => {
       if (payload?.enabled !== undefined) {
-        store.set("agentApiEnabled", Boolean(payload.enabled));
+        setStore("agentApiEnabled", Boolean(payload.enabled));
       }
 
       if (payload?.port !== undefined) {
         const port = Number(payload.port);
         if (Number.isFinite(port) && port > 1024 && port < 65536) {
-          store.set("agentApiPort", Math.round(port));
+          setStore("agentApiPort", Math.round(port));
         }
       }
 
       if (payload?.regenerateToken) {
-        store.set("agentApiToken", randomBytes(24).toString("hex"));
+        setStore("agentApiToken", randomBytes(24).toString("hex"));
       }
 
       await restartAgentApi();
@@ -2158,9 +2212,78 @@ function setupIPC() {  // Получить сохранённые настрой
   // Журнал действий пользователя: включается в настройках, нужен для разбора багов
   // Закрывать окно в трей или выходить из приложения
   ipcMain.handle("set-close-to-tray", (_event, value: boolean) => {
-    store.set("closeToTray", Boolean(value));
+    setStore("closeToTray", Boolean(value));
     log.info("Закрывать окно в трей:", value ? "включено" : "выключено");
     return true;
+  });
+
+  // Автообновление: проверяем релиз на GitHub и качаем новую версию.
+  ipcMain.handle("check-for-updates", async () => {
+    if (!app.isPackaged) {
+      return {
+        ok: false,
+        error: "Обновления доступны только в установленной версии",
+      };
+    }
+
+    try {
+      const result = await autoUpdater.checkForUpdates();
+      const version = result?.updateInfo?.version ?? "";
+      const current = app.getVersion();
+
+      if (!version || version === current) {
+        return { ok: true, upToDate: true, current };
+      }
+
+      return { ok: true, upToDate: false, version, current };
+    } catch (e) {
+      const message = e instanceof Error ? e.message : "Не удалось проверить обновления";
+      log.warn("Проверка обновлений не удалась:", message);
+      return { ok: false, error: message };
+    }
+  });
+
+  // Установить скачанное обновление и перезапустить приложение.
+  ipcMain.handle("install-update", async () => {
+    if (!app.isPackaged) {
+      return { ok: false, error: "Обновления доступны только в установленной версии" };
+    }
+
+    try {
+      // Файл ещё мог не скачаться — ждём и тогда ставим.
+      if (!updateDownloaded) {
+        await new Promise<void>((resolve, reject) => {
+          const timer = setTimeout(() => {
+            cleanup();
+            reject(new Error("Обновление не скачалось за 5 минут"));
+          }, 5 * 60 * 1000);
+
+          const onDownloaded = () => {
+            cleanup();
+            resolve();
+          };
+          const onError = (e: Error) => {
+            cleanup();
+            reject(e);
+          };
+          const cleanup = () => {
+            clearTimeout(timer);
+            autoUpdater.removeListener("update-downloaded", onDownloaded);
+            autoUpdater.removeListener("error", onError);
+          };
+
+          autoUpdater.on("update-downloaded", onDownloaded);
+          autoUpdater.on("error", onError);
+        });
+      }
+
+      autoUpdater.quitAndInstall();
+      return { ok: true };
+    } catch (e) {
+      const message = e instanceof Error ? e.message : "Не удалось установить обновление";
+      log.warn("Установка обновления не удалась:", message);
+      return { ok: false, error: message };
+    }
   });
 
   ipcMain.handle(
@@ -2218,6 +2341,54 @@ if (!hasSingleInstanceLock) {
       const clientId = getDiscordClientId();
       if (clientId) void discord.connect(clientId);
     }
+
+    // Автообновление: следим за релизом и сообщаем интерфейсу.
+    autoUpdater.autoDownload = true;
+    autoUpdater.autoInstallOnAppQuit = true;
+
+    autoUpdater.on("update-available", (info) => {
+      log.info("Доступно обновление:", info.version);
+      mainWindow?.webContents.send("update-available", { version: info.version });
+    });
+
+    autoUpdater.on("update-downloaded", (info) => {
+      log.info("Обновление скачано:", info.version);
+      updateDownloaded = true;
+      mainWindow?.webContents.send("update-downloaded", { version: info.version });
+    });
+
+    autoUpdater.on("error", (e) => {
+      log.warn("Автообновление не сработало:", e.message);
+      mainWindow?.webContents.send("update-error", { message: e.message });
+    });
+
+    // Сессия общая с Rust-версией: если там выполнили вход, подхватываем
+    // его здесь, и наоборот — вход в этой версии увидит Rust.
+    void importCookiesFromConfig().then((imported) => {
+      if (!imported) return;
+      void session.fromPartition(SC_PARTITION)
+        .cookies.get({ domain: ".soundcloud.com" })
+        .then((cookies) => {
+          const header = cookies.map((c) => `${c.name}=${c.value}`).join("; ");
+          if (header) {
+            setStore("scCookies", header);
+            setStore("loggedIn", true);
+            mainWindow?.webContents.send("auth-success", header);
+          }
+        });
+    });
+
+    watchSessionFile(store, (cookieHeader) => {
+      if (!cookieHeader) {
+        // В другой версии вышли из аккаунта — чистим сессию и выходим здесь.
+        void clearSessionCookies().then(() => {
+          setStore("loggedIn", false);
+          mainWindow?.webContents.send("logged-out");
+        });
+        return;
+      }
+      mainWindow?.webContents.send("auth-success", cookieHeader);
+    });
   });
 }
 

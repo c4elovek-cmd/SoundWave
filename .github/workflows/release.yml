@@ -50,7 +50,7 @@ jobs:
             gh release upload $tag @assets --clobber
             gh release edit $tag --draft=false --title "SoundWave $tag"
           } else {
-            gh release create $tag @assets --generate-notes --title "SoundWave $tag"
+            gh release create $tag @assets --generate-notes --title "SoundWave $tag" --notes "SoundWave $tag — сборка на Electron и на Rust (Tauri v2). Инсталлятор NSIS для Electron, .exe с подписью и latest.json для Rust."
           }
 
           # gh иногда оставляет рядом черновик с тем же тегом — убираем его
