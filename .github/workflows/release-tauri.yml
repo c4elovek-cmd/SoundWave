@@ -51,16 +51,18 @@ jobs:
           $assets = @(Get-ChildItem -Path src-tauri/target/release/bundle/nsis -File | Where-Object { $_.Extension -eq ".exe" } | ForEach-Object { $_.FullName })
           if (-not $assets) { throw "Артефакты не найдены в src-tauri/target/release/bundle/nsis" }
 
-          $releaseTag = $tag -replace '^rust-', ''
-          $version = ($releaseTag -replace '^v', '')
+          # Тег релиза оставляем с префиксом rust-, чтобы не спутать с
+          # версией на Electron (теги v*).
+          $releaseTag = $tag
+          $version = ($tag -replace '^rust-v', '')
 
           gh release view $releaseTag *> $null
           if ($LASTEXITCODE -eq 0) {
             Write-Output "Релиз $releaseTag уже есть — обновляем файлы"
             gh release upload $releaseTag @assets --clobber
-            gh release edit $releaseTag --draft=false --title "SoundWave $releaseTag (Rust)"
+            gh release edit $releaseTag --draft=false --title "SoundWave $version (Rust)"
           } else {
-            gh release create $releaseTag @assets --generate-notes --title "SoundWave $releaseTag (Rust)" --notes "Версия на Rust (Tauri v2). Размер установщика в разы меньше, памяти тоже."
+            gh release create $releaseTag @assets --generate-notes --title "SoundWave $version (Rust)" --notes "Версия на Rust (Tauri v2). Размер установщика в разы меньше, памяти тоже."
           }
 
           $drafts = gh api "repos/$env:GITHUB_REPOSITORY/releases" --jq ".[] | select(.draft == true and .tag_name == `"$releaseTag`") | .id"
