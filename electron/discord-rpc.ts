@@ -16,6 +16,8 @@ const OPCODE_PONG = 4;
 
 const PIPE_ATTEMPTS = 10;
 const RECONNECT_DELAY = 5000;
+/** Как часто напоминаем Discord о нашей активности. */
+const HEARTBEAT_INTERVAL = 60_000;
 
 export interface DiscordActivity {
   details?: string;
@@ -36,6 +38,7 @@ export class DiscordRpc {
   private attempts = 0;
   private activity: DiscordActivity | null = null;
   private reconnectTimer: NodeJS.Timeout | null = null;
+  private heartbeat: NodeJS.Timeout | null = null;
   private nonce = 0;
 
   /** Подключён ли Discord и принят ли handshake. */
@@ -49,6 +52,12 @@ export class DiscordRpc {
     this.stopped = false;
     this.clientId = clientId;
     this.attempts = 0;
+
+    // Discord держит только одну активность на аккаунт: если её заняло
+    // другое приложение, наша пропадёт. Раз в минуту напоминаем о себе.
+    this.heartbeat = setInterval(() => {
+      if (this.ready) this.sendActivity();
+    }, HEARTBEAT_INTERVAL);
 
     if (!clientId) {
       log.warn("Discord RPC: не задан Client ID");
@@ -72,6 +81,11 @@ export class DiscordRpc {
     if (this.reconnectTimer) {
       clearTimeout(this.reconnectTimer);
       this.reconnectTimer = null;
+    }
+
+    if (this.heartbeat) {
+      clearInterval(this.heartbeat);
+      this.heartbeat = null;
     }
 
     if (this.socket) {

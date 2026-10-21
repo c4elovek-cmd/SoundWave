@@ -223,6 +223,11 @@
   color: var(--accent);
 }
 
+/* Лайк не прошёл — например, истёкшая сессия SoundCloud */
+.player-like.failed {
+  color: #e5484d;
+}
+
 /* Подсказка громкости при прокрутке колёсиком */
 .volume-hint {
   position: absolute;

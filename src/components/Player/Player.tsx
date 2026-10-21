@@ -52,6 +52,7 @@ export default function Player() {
     karaokeFullscreen,
     likedTracks,
     toggleLike,
+    likeError,
   } = useAppStore();
   const [localProgress, setLocalProgress] = useState(0);
   const [volumeHint, setVolumeHint] = useState<number | null>(null);
@@ -192,9 +193,17 @@ export default function Player() {
           )}
         </div>
         <button
-          className={`icon-btn player-like ${isLiked ? "active" : ""}`}
+          className={`icon-btn player-like ${isLiked ? "active" : ""} ${
+            likeError ? "failed" : ""
+          }`}
           onClick={() => void toggleLike(currentTrack)}
-          title={isLiked ? "Убрать из избранного" : "В избранное"}
+          title={
+            likeError
+              ? likeError
+              : isLiked
+                ? "Убрать из избранного"
+                : "В избранное"
+          }
         >
           <Heart size={18} weight={isLiked ? "fill" : "regular"} />
         </button>

@@ -618,6 +618,27 @@ export default function SettingsModal() {
                     ? "Укажите Client ID — без него Discord не подключится"
                     : "Нет подключения — проверьте, запущен ли Discord"}
               </div>
+
+              <div className="settings-inline" style={{ marginTop: 12 }}>
+                <button
+                  className="settings-button"
+                  onClick={() => {
+                    void window.electronAPI?.setDiscordPresence?.({
+                      details: "SoundWave запущен",
+                      state: "Проверка связи с Discord",
+                      largeText: "SoundWave",
+                      smallText: "Проверка",
+                      startTimestamp: Math.floor(Date.now() / 1000),
+                    });
+                  }}
+                >
+                  Показать тестовую активность
+                </button>
+                <span className="settings-note" style={{ margin: 0 }}>
+                  Discord показывает только одну активность: если её заняло
+                  другое приложение, закройте его.
+                </span>
+              </div>
             </div>
           </>
         );

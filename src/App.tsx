@@ -150,7 +150,10 @@ export default function App() {
         import("./lib/soundcloud-api")
           .then(({ scApi }) => scApi.getMe())
           .then((me) => setLoggedIn(true, me))
-          .catch(() => {});
+          .catch(() => {
+            // Сессия протухла — показываем кнопку входа, а не пустое меню.
+            setLoggedIn(false);
+          });
       }
     });
 

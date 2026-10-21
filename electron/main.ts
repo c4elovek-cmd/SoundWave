@@ -2011,8 +2011,13 @@ function setupIPC() {  // Получить сохранённые настрой
 
       if (!presence) {
         discord.setActivity(null);
+        log.info("Discord: активность очищена");
         return true;
       }
+
+      log.info(
+        `Discord: активность — «${presence.details ?? ""}» / «${presence.state ?? ""}»`
+      );
 
       discord.setActivity({
         details: presence.details,
