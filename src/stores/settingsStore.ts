@@ -50,6 +50,9 @@ export interface SettingsValues {
 
   // Журнал действий пользователя — для разбора багов
   actionLog: boolean;
+
+  // Закрывать окно — свернуть в трей, а не выходить из приложения
+  closeToTray: boolean;
 }
 
 const DEFAULTS: SettingsValues = {
@@ -76,6 +79,8 @@ const DEFAULTS: SettingsValues = {
   agentApiPort: 4783,
 
   actionLog: false,
+
+  closeToTray: true,
 };
 
 const STORAGE_KEY = "sw-settings";
@@ -161,6 +166,7 @@ export const useSettingsStore = create<SettingsState>((set, get) => ({
       agentApiEnabled: state.agentApiEnabled,
       agentApiPort: state.agentApiPort,
       actionLog: state.actionLog,
+      closeToTray: state.closeToTray,
     });
   },
 

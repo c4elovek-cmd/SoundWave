@@ -747,6 +747,20 @@ export default function SettingsModal() {
               />
             </Row>
 
+            <Row
+              label="Закрывать в трей"
+              hint="Крестик на окне сворачивает приложение в трей, а не закрывает его"
+            >
+              <Switch
+                checked={settings.closeToTray}
+                onChange={(value) => {
+                  setSetting("closeToTray", value);
+                  void window.electronAPI?.setCloseToTray?.(value);
+                }}
+                label="Закрывать окно в трей"
+              />
+            </Row>
+
             <Row label="Папка данных" hint="Кэш текстов, свои шрифты, конфиг, логи">
               <button
                 className="settings-button"

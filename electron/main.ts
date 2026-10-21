@@ -1130,7 +1130,9 @@ function createWindow() {
 
   // Сворачивание в трей
   mainWindow.on("close", (event) => {
-    if (!isQuitting) {
+    // Пользователь может запретить сворачивание в трей — тогда крестик
+    // действительно закрывает приложение.
+    if (!isQuitting && store.get("closeToTray") !== false) {
       event.preventDefault();
       mainWindow?.hide();
       return false;
@@ -2149,6 +2151,13 @@ function setupIPC() {  // Получить сохранённые настрой
   });
 
   // Журнал действий пользователя: включается в настройках, нужен для разбора багов
+  // Закрывать окно в трей или выходить из приложения
+  ipcMain.handle("set-close-to-tray", (_event, value: boolean) => {
+    store.set("closeToTray", Boolean(value));
+    log.info("Закрывать окно в трей:", value ? "включено" : "выключено");
+    return true;
+  });
+
   ipcMain.handle(
     "log-action",
     (_event, action: string, details: Record<string, unknown> = {}) => {

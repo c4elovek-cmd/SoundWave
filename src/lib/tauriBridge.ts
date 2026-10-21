@@ -166,21 +166,33 @@ export function createTauriBridge(): Window["electronAPI"] {
     removeCustomFont: async () => false,
 
     // --- Discord Rich Presence ---
-    discordStatus: async () => ({
-      enabled: false,
-      clientId: "1562164443893211307",
-      builtIn: true,
-      largeImage: "wave",
-      connected: false,
-    }),
-    setDiscordConfig: async () => ({
-      enabled: false,
-      clientId: "1562164443893211307",
-      builtIn: true,
-      largeImage: "wave",
-      connected: false,
-    }),
-    setDiscordPresence: async () => false,
+    discordStatus: () =>
+      invoke<{
+        enabled: boolean;
+        clientId: string;
+        builtIn: boolean;
+        largeImage: string;
+        connected: boolean;
+      }>("discord_status"),
+    setDiscordConfig: (config: {
+      enabled?: boolean;
+      clientId?: string;
+      largeImage?: string;
+    }) =>
+      invoke<{
+        enabled: boolean;
+        clientId: string;
+        builtIn: boolean;
+        largeImage: string;
+        connected: boolean;
+      }>("set_discord_config", { payload: config }),
+    setDiscordPresence: (presence: {
+      details?: string;
+      state?: string;
+      largeText?: string;
+      smallText?: string;
+      startTimestamp?: number;
+    } | null) => invoke<boolean>("set_discord_presence", { presence }),
 
     // --- Настройки локального API ---
     agentApiConfig: async () => ({
@@ -192,6 +204,10 @@ export function createTauriBridge(): Window["electronAPI"] {
 
     // --- Папка с данными ---
     openUserData: async () => false,
+
+    // Закрывать окно в трей или выходить из приложения
+    setCloseToTray: (value: boolean) =>
+      invoke<boolean>("set_close_to_tray", { value }),
 
     // --- Журнал действий ---
     logAction: (action: string, details?: Record<string, unknown>) =>

@@ -5,6 +5,7 @@
 //! (`src/lib/tauriBridge.ts`), поэтому компоненты не трогаем.
 
 mod config;
+pub mod discord;
 pub mod lyrics;
 pub mod session;
 pub mod soundcloud;
@@ -634,6 +635,211 @@ async fn get_synced_lyrics(title: String, artist: String, duration: f64) -> Valu
     serde_json::to_value(result).unwrap_or(Value::Null)
 }
 
+/// Закрывать окно в трей или выходить из приложения.
+#[tauri::command]
+fn set_close_to_tray(value: bool) -> Result<bool, String> {
+    config::set_value("closeToTray", Value::Bool(value))?;
+    Ok(true)
+}
+
+// --- Discord Rich Presence -------------------------------------------------
+
+/// Текущий Client ID: свой из настроек или вшитый в сборку.
+fn discord_client_id(config: &Value) -> String {
+    let custom = config
+        .get("discordClientId")
+        .and_then(|v| v.as_str())
+        .unwrap_or("")
+        .trim()
+        .to_string();
+
+    if custom.is_empty() {
+        discord::DEFAULT_DISCORD_CLIENT_ID.to_string()
+    } else {
+        custom
+    }
+}
+
+/// Статус Discord Rich Presence.
+#[tauri::command]
+fn discord_status(app: AppHandle) -> Value {
+    let config = config::load();
+    let custom = config
+        .get("discordClientId")
+        .and_then(|v| v.as_str())
+        .unwrap_or("")
+        .trim()
+        .is_empty();
+
+    let connected = app
+        .try_state::<discord::DiscordRpc>()
+        .map(|rpc| rpc.is_connected())
+        .unwrap_or(false);
+
+    serde_json::json!({
+        "enabled": config.get("discordEnabled").and_then(|v| v.as_bool()).unwrap_or(true),
+        "clientId": discord_client_id(&config),
+        "builtIn": custom,
+        "largeImage": config.get("discordLargeImage").and_then(|v| v.as_str()).unwrap_or(""),
+        "connected": connected,
+    })
+}
+
+/// Настройки Discord: включение, Client ID, обложка.
+#[tauri::command]
+fn set_discord_config(app: AppHandle, payload: Value) -> Result<Value, String> {
+    if let Some(enabled) = payload.get("enabled").and_then(|v| v.as_bool()) {
+        config::set_value("discordEnabled", Value::Bool(enabled))?;
+    }
+    if let Some(client_id) = payload.get("clientId").and_then(|v| v.as_str()) {
+        config::set_value("discordClientId", Value::String(client_id.trim().to_string()))?;
+    }
+    if let Some(large_image) = payload.get("largeImage").and_then(|v| v.as_str()) {
+        config::set_value(
+            "discordLargeImage",
+            Value::String(large_image.trim().to_string()),
+        )?;
+    }
+
+    let config = config::load();
+    let enabled = config
+        .get("discordEnabled")
+        .and_then(|v| v.as_bool())
+        .unwrap_or(true);
+    let client_id = discord_client_id(&config);
+
+    if let Some(rpc) = app.try_state::<discord::DiscordRpc>() {
+        if enabled && !client_id.is_empty() {
+            rpc.connect(&client_id);
+        } else {
+            rpc.stop();
+        }
+    }
+
+    Ok(discord_status(app))
+}
+
+/// Показывает активность в профиле Discord.
+#[tauri::command]
+fn set_discord_presence(app: AppHandle, presence: Option<Value>) -> Result<bool, String> {
+    let config = config::load();
+
+    // Выключено пользователем — не отправляем ничего.
+    if config.get("discordEnabled").and_then(|v| v.as_bool()) == Some(false) {
+        return Ok(false);
+    }
+
+    let Some(rpc) = app.try_state::<discord::DiscordRpc>() else {
+        return Ok(false);
+    };
+
+    let Some(presence) = presence else {
+        rpc.set_activity(None);
+        return Ok(true);
+    };
+
+    let large_image = config
+        .get("discordLargeImage")
+        .and_then(|v| v.as_str())
+        .unwrap_or("")
+        .trim()
+        .to_string();
+
+    let activity = discord::DiscordActivity {
+        details: presence
+            .get("details")
+            .and_then(|v| v.as_str())
+            .map(String::from),
+        state: presence.get("state").and_then(|v| v.as_str()).map(String::from),
+        large_text: presence
+            .get("largeText")
+            .and_then(|v| v.as_str())
+            .map(String::from),
+        small_text: presence
+            .get("smallText")
+            .and_then(|v| v.as_str())
+            .map(String::from),
+        large_image_key: Some(if large_image.is_empty() {
+            discord::DEFAULT_DISCORD_ASSET.to_string()
+        } else {
+            large_image
+        }),
+        large_image_text: presence
+            .get("largeText")
+            .and_then(|v| v.as_str())
+            .map(String::from),
+        start_timestamp: presence.get("startTimestamp").and_then(|v| v.as_i64()),
+    };
+
+    rpc.set_activity(Some(activity));
+    Ok(true)
+}
+
+/// Создаёт иконку в трее: управление воспроизведением и выход.
+fn create_tray(app: &AppHandle) -> tauri::Result<()> {
+    use tauri::menu::{Menu, MenuItem};
+    use tauri::tray::{MouseButton, MouseButtonState, TrayIconBuilder, TrayIconEvent};
+
+    let show = MenuItem::with_id(app, "show", "Показать SoundWave", true, None::<&str>)?;
+    let play = MenuItem::with_id(app, "play", "Воспроизвести / Пауза", true, None::<&str>)?;
+    let next = MenuItem::with_id(app, "next", "Следующий трек", true, None::<&str>)?;
+    let prev = MenuItem::with_id(app, "prev", "Предыдущий трек", true, None::<&str>)?;
+    let quit = MenuItem::with_id(app, "quit", "Выйти", true, None::<&str>)?;
+
+    let menu = Menu::with_items(app, &[&show, &play, &next, &prev, &quit])?;
+
+    let mut builder = TrayIconBuilder::with_id("soundwave")
+        .tooltip("SoundWave")
+        .menu(&menu)
+        .show_menu_on_left_click(false)
+        .on_menu_event(|app, event| {
+            let handle = app.clone();
+            match event.id().as_ref() {
+                "show" => focus_main_window(handle),
+                "play" => {
+                    let _ = handle.emit("tray-play-pause", ());
+                }
+                "next" => {
+                    let _ = handle.emit("tray-next", ());
+                }
+                "prev" => {
+                    let _ = handle.emit("tray-prev", ());
+                }
+                "quit" => handle.exit(0),
+                _ => {}
+            }
+        })
+        .on_tray_icon_event(|tray, event| {
+            // Левый клик — показать окно, как в остальных плеерах.
+            if let TrayIconEvent::Click {
+                button: MouseButton::Left,
+                button_state: MouseButtonState::Up,
+                ..
+            } = event
+            {
+                let handle = tray.app_handle().clone();
+                focus_main_window(handle);
+            }
+        });
+
+    if let Some(icon) = app.default_window_icon().cloned() {
+        builder = builder.icon(icon);
+    }
+
+    builder.build(app)?;
+
+    Ok(())
+}
+
+/// Показывает главное окно и ставит его на передний план.
+fn focus_main_window(app: AppHandle) {
+    if let Some(win) = app.get_webview_window("main") {
+        let _ = win.show();
+        let _ = win.unminimize();
+        let _ = win.set_focus();
+    }
+}
+
 // --- Окно ------------------------------------------------------------------
 
 fn main_window(app: &tauri::AppHandle) -> Option<tauri::WebviewWindow> {
@@ -674,10 +880,7 @@ fn window_close(app: tauri::AppHandle) {
 
 #[tauri::command]
 fn show_window(app: tauri::AppHandle) {
-    if let Some(win) = main_window(&app) {
-        let _ = win.show();
-        let _ = win.set_focus();
-    }
+    focus_main_window(app);
 }
 
 #[tauri::command]
@@ -710,6 +913,29 @@ pub fn run() {
             sc: SoundCloud::new(),
             token_before_login: std::sync::Mutex::new(None),
         })
+        .manage(discord::DiscordRpc::new())
+        .setup(|app| {
+            // Иконка в трее: из неё приложение возвращается и выходит.
+            if let Err(e) = create_tray(app.handle()) {
+                eprintln!("Не удалось создать трей: {e}");
+            }
+
+            // Discord Rich Presence подключаем сразу, если он включён.
+            let config = config::load();
+            let enabled = config
+                .get("discordEnabled")
+                .and_then(|v| v.as_bool())
+                .unwrap_or(true);
+            let client_id = discord_client_id(&config);
+
+            if enabled && !client_id.is_empty() {
+                if let Some(rpc) = app.try_state::<discord::DiscordRpc>() {
+                    rpc.connect(&client_id);
+                }
+            }
+
+            Ok(())
+        })
         .invoke_handler(tauri::generate_handler![
             get_client_id,
             resolve_stream,
@@ -718,6 +944,9 @@ pub fn run() {
             toggle_like,
             get_lyrics,
             get_synced_lyrics,
+            discord_status,
+            set_discord_config,
+            set_discord_presence,
             open_auth_window,
             open_manual_login,
             open_real_login,
@@ -730,6 +959,7 @@ pub fn run() {
             logout,
             get_config,
             set_config_value,
+            set_close_to_tray,
             set_theme,
             set_volume,
             open_external,
@@ -744,10 +974,23 @@ pub fn run() {
         ])
         .on_window_event(|window, event| {
             if let WindowEvent::CloseRequested { api, .. } = event {
-                // Окно не закрывается, а прячется в трей — как в Electron-версии.
-                if window.label() == "main" {
+                if window.label() != "main" {
+                    return;
+                }
+
+                // По настройке: крестик либо сворачивает в трей, либо выходит.
+                let close_to_tray = config::load()
+                    .get("closeToTray")
+                    .and_then(|v| v.as_bool())
+                    .unwrap_or(true);
+
+                if close_to_tray {
                     api.prevent_close();
                     let _ = window.hide();
+                } else {
+                    let handle = window.app_handle().clone();
+                    let _ = window.destroy();
+                    handle.exit(0);
                 }
             }
         })

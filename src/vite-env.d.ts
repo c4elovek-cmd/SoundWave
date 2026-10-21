@@ -144,6 +144,7 @@ declare global {
         url: string | null;
       }>;
       openUserData: () => Promise<boolean>;
+      setCloseToTray: (value: boolean) => Promise<boolean>;
       logAction: (
         action: string,
         details?: Record<string, unknown>
