@@ -5,6 +5,7 @@
 //! (`src/lib/tauriBridge.ts`), поэтому компоненты не трогаем.
 
 mod config;
+pub mod lyrics;
 pub mod session;
 pub mod soundcloud;
 
@@ -12,7 +13,7 @@ use std::collections::HashMap;
 
 use reqwest::Method;
 use serde_json::Value;
-use tauri::{AppHandle, Emitter, Listener, Manager, State, WebviewUrl, WebviewWindowBuilder, WindowEvent};
+use tauri::{AppHandle, Emitter, Manager, State, WebviewUrl, WebviewWindowBuilder, WindowEvent};
 
 use soundcloud::{SoundCloud, StreamInfo};
 
@@ -617,6 +618,22 @@ fn logout(app: AppHandle, state: State<'_, AppState>) -> Result<bool, String> {
     Ok(true)
 }
 
+// --- Тексты песен ----------------------------------------------------------
+
+/// Текст песни: Genius, при неудаче — LRCLIB.
+#[tauri::command]
+async fn get_lyrics(title: String, artist: String, description: String) -> Value {
+    let result = lyrics::get_lyrics(&title, &artist, &description).await;
+    serde_json::to_value(result).unwrap_or(Value::Null)
+}
+
+/// Тайминги строк для караоке — из открытого каталога LRCLIB.
+#[tauri::command]
+async fn get_synced_lyrics(title: String, artist: String, duration: f64) -> Value {
+    let result = lyrics::get_synced_lyrics(&title, &artist, duration).await;
+    serde_json::to_value(result).unwrap_or(Value::Null)
+}
+
 // --- Окно ------------------------------------------------------------------
 
 fn main_window(app: &tauri::AppHandle) -> Option<tauri::WebviewWindow> {
@@ -699,6 +716,8 @@ pub fn run() {
             sc_request,
             sc_write,
             toggle_like,
+            get_lyrics,
+            get_synced_lyrics,
             open_auth_window,
             open_manual_login,
             open_real_login,

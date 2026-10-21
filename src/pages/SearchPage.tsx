@@ -6,6 +6,7 @@ import { SCTrack, SCUser, SCPlaylist } from "../types/soundcloud";
 import TrackRow from "../components/Track/TrackRow";
 import Card from "../components/Track/Card";
 import "./Pages.css";
+import { errorText } from "../lib/errorText";
 
 type Tab = "tracks" | "artists" | "playlists";
 
@@ -76,7 +77,7 @@ export default function SearchPage() {
         );
       }
     } catch (e) {
-      setError(e instanceof Error ? e.message : "Ошибка поиска");
+      setError(errorText(e, "Ошибка поиска"));
     } finally {
       setLoading(false);
     }

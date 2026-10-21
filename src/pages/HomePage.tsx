@@ -7,6 +7,7 @@ import { SCTrack, SCUser, SCPlaylist } from "../types/soundcloud";
 import TrackRow from "../components/Track/TrackRow";
 import Card from "../components/Track/Card";
 import "./Pages.css";
+import { errorText } from "../lib/errorText";
 
 export default function HomePage() {
   const { isLoggedIn, currentUser, likedTracks, setLikedTracks } = useAppStore();
@@ -68,7 +69,7 @@ export default function HomePage() {
         setError("Не удалось загрузить данные SoundCloud");
       }
     } catch (e) {
-      setError(e instanceof Error ? e.message : "Ошибка загрузки");
+      setError(errorText(e, "Ошибка загрузки"));
     } finally {
       setLoading(false);
     }

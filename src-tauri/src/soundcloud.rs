@@ -267,31 +267,34 @@ impl SoundCloud {
             .cloned()
             .unwrap_or_default();
 
-        // HLS-потоки: fMP4 (audio/mp4) играется через MSE, MPEG-TS — нет.
+        // Выбираем поток, который браузер действительно сможет сыграть.
+        //
+        // У SoundCloud бывают три вида:
+        //   progressive        — обычный mp3, играет всегда;
+        //   hls                — открытый HLS с сегментами fMP4;
+        //   ctr-encrypted-hls  — HLS с ключом в data-URI (Common Encryption),
+        //                        такой hls.js расшифровывает;
+        //   cbc-encrypted-hls  — FairPlay (`skd://`, com.apple.streamingkeydelivery),
+        //                        его не играет ни один браузер — только в последнюю
+        //                        очередь, когда других вариантов нет.
         let chosen = transcodings
             .iter()
-            .find(|t| {
-                t.get("format")
-                    .and_then(|f| f.get("protocol"))
-                    .and_then(|p| p.as_str())
-                    == Some("progressive")
+            .find(|t| protocol_of(t) == "progressive")
+            .or_else(|| transcodings.iter().find(|t| protocol_of(t) == "hls"))
+            .or_else(|| {
+                transcodings
+                    .iter()
+                    .find(|t| protocol_of(t) == "ctr-encrypted-hls")
             })
             .or_else(|| {
-                transcodings.iter().find(|t| {
-                    t.get("format")
-                        .and_then(|f| f.get("mime_type"))
-                        .and_then(|m| m.as_str())
-                        .map(|m| m.contains("mp4"))
-                        .unwrap_or(false)
-                })
+                transcodings
+                    .iter()
+                    .find(|t| mime_of(t).contains("mp4") && !protocol_of(t).contains("encrypted"))
             })
             .or_else(|| {
-                transcodings.iter().find(|t| {
-                    t.get("format")
-                        .and_then(|f| f.get("protocol"))
-                        .and_then(|p| p.as_str())
-                        == Some("hls")
-                })
+                transcodings
+                    .iter()
+                    .find(|t| protocol_of(t) == "cbc-encrypted-hls")
             })
             .or_else(|| transcodings.first())
             .cloned()
@@ -320,6 +323,13 @@ impl SoundCloud {
             .unwrap_or("progressive")
             .to_string();
 
+        // Остались только зашифрованные потоки: такой трек закрыт DRM
+        // (FairPlay или Common Encryption) и браузер его не расшифрует.
+        // Лучше честно сказать об этом, чем молча стоять на 0:00.
+        if protocol.contains("encrypted") {
+            return Err("Трек защищён DRM — звук недоступен".to_string());
+        }
+
         let duration = track
             .get("duration")
             .and_then(|d| d.as_u64())
@@ -331,6 +341,24 @@ impl SoundCloud {
             duration,
         })
     }
+}
+
+/// Протокол потока из списка транскодировок.
+fn protocol_of(transcoding: &Value) -> &str {
+    transcoding
+        .get("format")
+        .and_then(|f| f.get("protocol"))
+        .and_then(|p| p.as_str())
+        .unwrap_or("")
+}
+
+/// MIME-тип потока из списка транскодировок.
+fn mime_of(transcoding: &Value) -> &str {
+    transcoding
+        .get("format")
+        .and_then(|f| f.get("mime_type"))
+        .and_then(|m| m.as_str())
+        .unwrap_or("")
 }
 
 /// Ищет client_id в тексте JS-бандла.

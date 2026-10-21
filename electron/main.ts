@@ -1684,17 +1684,38 @@ function setupIPC() {  // Получить сохранённые настрой
       format?: { protocol?: string; mime_type?: string };
     }> = track?.media?.transcodings ?? [];
 
-    // SoundCloud отдаёт потоки в HLS. Выбираем fMP4 (audio/mp4) — такие
-    // сегменты MediaSource в Chromium понимает, а MPEG-TS (audio/mpegurl)
-    // через MSE не воспроизводится.
+    // Выбираем поток, который браузер действительно сможет сыграть.
+    //
+    // У SoundCloud бывают три вида:
+    //   progressive        — обычный mp3, играет всегда;
+    //   hls                — открытый HLS с сегментами fMP4;
+    //   ctr-encrypted-hls  — HLS с ключом в data-URI (Common Encryption),
+    //                        такой hls.js расшифровывает;
+    //   cbc-encrypted-hls  — FairPlay (`skd://`, com.apple.streamingkeydelivery),
+    //                        его не играет ни один браузер — только в последнюю
+    //                        очередь, когда других вариантов нет.
+    const protocolOf = (t: any) => String(t?.format?.protocol ?? "");
+    const mimeOf = (t: any) => String(t?.format?.mime_type ?? "");
+
     const chosen =
-      transcodings.find((t) => t.format?.protocol === "progressive") ??
-      transcodings.find((t) => (t.format?.mime_type ?? "").includes("mp4")) ??
-      transcodings.find((t) => t.format?.protocol === "hls") ??
+      transcodings.find((t) => protocolOf(t) === "progressive") ??
+      transcodings.find((t) => protocolOf(t) === "hls") ??
+      transcodings.find((t) => protocolOf(t) === "ctr-encrypted-hls") ??
+      transcodings.find(
+        (t) => mimeOf(t).includes("mp4") && !protocolOf(t).includes("encrypted")
+      ) ??
+      transcodings.find((t) => protocolOf(t) === "cbc-encrypted-hls") ??
       transcodings[0];
 
     if (!chosen) {
       throw new Error("У трека нет доступных потоков");
+    }
+
+    // Остались только зашифрованные потоки: такой трек закрыт DRM
+    // (FairPlay или Common Encryption) и браузер его не расшифрует.
+    // Лучше честно сказать об этом, чем молча стоять на 0:00.
+    if (protocolOf(chosen).includes("encrypted")) {
+      throw new Error("Трек защищён DRM — звук недоступен");
     }
 
     const manifestUrl = `${chosen.url}${chosen.url.includes("?") ? "&" : "?"}client_id=${id}`;

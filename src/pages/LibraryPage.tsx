@@ -6,6 +6,7 @@ import { scApi } from "../lib/soundcloud-api";
 import { SCTrack } from "../types/soundcloud";
 import TrackRow from "../components/Track/TrackRow";
 import "./Pages.css";
+import { errorText } from "../lib/errorText";
 
 type Mode = "likes" | "uploads";
 
@@ -43,7 +44,7 @@ export default function LibraryPage({ mode }: Props) {
       if (mode === "likes") setLikedTracks(list);
       else setUploadedTracks(list);
     } catch (e) {
-      setError(e instanceof Error ? e.message : "Ошибка загрузки");
+      setError(errorText(e, "Ошибка загрузки"));
     } finally {
       setLoading(false);
     }

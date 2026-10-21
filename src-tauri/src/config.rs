@@ -4,11 +4,9 @@
 //! (`%APPDATA%\soundwave\soundwave-config.json`), чтобы пользователю не
 //! пришлось заново выставлять громкость, тему и порт локального API.
 
-use std::collections::HashMap;
 use std::fs;
 use std::path::PathBuf;
 
-use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
 fn config_dir() -> PathBuf {
@@ -75,18 +73,8 @@ pub fn set_value(key: &str, val: Value) -> Result<(), String> {
     save(&config)
 }
 
-/// Плоский список «ключ → значение» — для передачи в интерфейс.
-pub fn flatten(value: &Value) -> HashMap<String, Value> {
-    let mut map = HashMap::new();
-    if let Some(obj) = value.as_object() {
-        for (key, val) in obj {
-            map.insert(key.clone(), val.clone());
-        }
-    }
-    map
-}
-
-/// Читает список своих шрифтов (пути к файлам).
+/// Список своих шрифтов (пути к файлам).
+#[allow(dead_code)]
 pub fn custom_fonts() -> Vec<String> {
     let config = load();
     config
@@ -101,51 +89,7 @@ pub fn custom_fonts() -> Vec<String> {
 }
 
 /// Сохраняет список своих шрифтов.
+#[allow(dead_code)]
 pub fn set_custom_fonts(fonts: &[String]) -> Result<(), String> {
     set_value("customFonts", serde_json::json!(fonts))
-}
-
-/// Настройки в виде структуры — для Rust-кода, которому нужен тип.
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct AppConfig {
-    #[serde(default = "default_theme")]
-    pub theme: String,
-    #[serde(default)]
-    pub base_theme: String,
-    #[serde(default = "default_volume")]
-    pub volume: f64,
-    #[serde(default)]
-    pub discord_client_id: String,
-    #[serde(default)]
-    pub agent_api_port: u16,
-    #[serde(default = "default_true")]
-    pub agent_api_enabled: bool,
-    #[serde(default)]
-    pub custom_fonts: Vec<String>,
-}
-
-fn default_theme() -> String {
-    "dark".to_string()
-}
-
-fn default_volume() -> f64 {
-    0.8
-}
-
-fn default_true() -> bool {
-    true
-}
-
-impl AppConfig {
-    pub fn from_value(value: &Value) -> Self {
-        serde_json::from_value(value.clone()).unwrap_or(AppConfig {
-            theme: default_theme(),
-            base_theme: String::new(),
-            volume: default_volume(),
-            discord_client_id: "1562164443893211307".to_string(),
-            agent_api_port: 4783,
-            agent_api_enabled: true,
-            custom_fonts: Vec::new(),
-        })
-    }
 }

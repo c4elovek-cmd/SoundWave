@@ -136,14 +136,24 @@ export function createTauriBridge(): Window["electronAPI"] {
       }),
 
     // --- Тексты песен ---
-    getLyrics: async () => ({
-      found: false,
-      error: "Поиск текста ещё не перенесён на Rust",
-    }),
-    getSyncedLyrics: async () => ({
-      found: false,
-      error: "Поиск текста ещё не перенесён на Rust",
-    }),
+    getLyrics: (title: string, artist: string, description?: string) =>
+      invoke<{
+        found: boolean;
+        title?: string;
+        artist?: string;
+        url?: string;
+        lyrics?: string;
+        error?: string;
+      }>("get_lyrics", { title, artist, description: description ?? "" }),
+    getSyncedLyrics: (title: string, artist: string, duration: number) =>
+      invoke<{
+        found: boolean;
+        syncedLyrics?: string;
+        title?: string;
+        artist?: string;
+        duration?: number;
+        error?: string;
+      }>("get_synced_lyrics", { title, artist, duration }),
     openExternal: (url: string) => invoke<boolean>("open_external", { url }),
 
     // --- Локальный API для агентов ---

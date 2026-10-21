@@ -59,5 +59,10 @@ export default defineConfig({
   server: {
     port: 1420,
     strictPort: true,
+    watch: {
+      // Папка сборки Rust меняется во время `cargo build` — за ней
+      // нельзя следить: файлы блокируются запущенным приложением.
+      ignored: ["**/src-tauri/target/**"],
+    },
   },
 });

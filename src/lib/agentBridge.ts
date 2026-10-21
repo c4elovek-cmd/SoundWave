@@ -10,6 +10,7 @@ import { scApi, getArtwork } from "./soundcloud-api";
 import { parseLrc } from "./lyrics";
 import { logAction } from "./actionLog";
 import { SCPlaylist, SCTrack, SCUser } from "../types/soundcloud";
+import { errorText } from "./errorText";
 
 interface AgentRequest {
   id: string;
@@ -539,7 +540,7 @@ export function startAgentBridge(): () => void {
         response = {
           id: request.id,
           ok: false,
-          error: error instanceof Error ? error.message : "Неизвестная ошибка",
+          error: errorText(error, "Неизвестная ошибка"),
           code: error instanceof BridgeError ? error.code : "error",
         };
       }

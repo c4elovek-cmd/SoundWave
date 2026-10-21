@@ -11,6 +11,7 @@ import { SCTrack } from "../types/soundcloud";
 import { collectWaveCandidates, loadWaveSeed, WaveMode, WaveSeed } from "../lib/wave";
 import { logAction } from "../lib/actionLog";
 import { usePlayerStore } from "./playerStore";
+import { errorText } from "../lib/errorText";
 
 const MODE_KEY = "sw-wave-mode";
 const PLAYED_KEY = "sw-wave-played";
@@ -144,7 +145,7 @@ export const useWaveStore = create<WaveState>((set, get) => ({
     } catch (e) {
       set({
         loading: false,
-        error: e instanceof Error ? e.message : "Не удалось собрать волну",
+        error: errorText(e, "Не удалось собрать волну"),
       });
     }
   },

@@ -1,5 +1,6 @@
 import { create } from "zustand";
 import { SCTrack } from "../types/soundcloud";
+import { errorText } from "../lib/errorText";
 
 export interface LyricsResult {
   found: boolean;
@@ -168,7 +169,7 @@ export const useLyricsStore = create<LyricsState>((set, get) => ({
       set({
         loading: false,
         result: null,
-        error: e instanceof Error ? e.message : "Не удалось загрузить текст",
+        error: errorText(e, "Не удалось загрузить текст"),
       });
     }
   },
