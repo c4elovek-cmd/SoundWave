@@ -1636,6 +1636,34 @@ function setupIPC() {  // Получить сохранённые настрой
   );
 
   /**
+   * Помечает DRM-треки прямо в ответе API.
+   *
+   * У SoundCloud для защищённых треков есть только зашифрованные потоки —
+   * их не играет ни один браузер. Флаг ставит интерфейс, чтобы не пускать
+   * такие треки в очередь.
+   */
+  function markDrmTracks(value: any): void {
+    if (Array.isArray(value)) {
+      value.forEach(markDrmTracks);
+      return;
+    }
+    if (!value || typeof value !== "object") return;
+
+    for (const item of Object.values(value)) {
+      markDrmTracks(item);
+    }
+
+    const transcodings = value?.media?.transcodings;
+    if (
+      Array.isArray(transcodings) &&
+      transcodings.length > 0 &&
+      transcodings.every((t) => String(t?.format?.protocol ?? "").includes("encrypted"))
+    ) {
+      value.drm = true;
+    }
+  }
+
+  /**
    * Прокси к внутреннему API SoundCloud.
    * Запросы идут из main-процесса: там нет CORS-ограничений и можно передать Cookie,
    * который браузер в renderer обрезает как запрещённый заголовок.
@@ -1668,7 +1696,10 @@ function setupIPC() {  // Получить сохранённые настрой
       }
 
       try {
-        return JSON.parse(text);
+        const data = JSON.parse(text);
+        // Помечаем DRM-треки: в очередь такие попадать не должны.
+        markDrmTracks(data);
+        return data;
       } catch {
         return text;
       }
