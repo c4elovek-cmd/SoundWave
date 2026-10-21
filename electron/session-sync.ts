@@ -132,6 +132,26 @@ export async function importCookiesFromConfig(force = false): Promise<boolean> {
 }
 
 /**
+ * Убирает cookies SoundCloud из сессии Electron.
+ *
+ * Нужно, когда сессию закрыли в другой версии приложения.
+ */
+export async function clearSessionCookies(): Promise<void> {
+  const ses = session.fromPartition(SC_PARTITION);
+  const cookies = await ses.cookies.get({ domain: ".soundcloud.com" });
+
+  for (const cookie of cookies) {
+    const domain = cookie.domain ?? ".soundcloud.com";
+    const url = `https://${domain.replace(/^\./, "")}${cookie.path ?? "/"}`;
+    try {
+      await ses.cookies.remove(url, cookie.name);
+    } catch {
+      // Если не удалось — не страшно, главное не блокировать остальное.
+    }
+  }
+}
+
+/**
  * Следит за файлом настроек и сообщает, когда сессия изменилась.
  *
  * Вход в другой версии приложения должен подхватываться сразу, а не

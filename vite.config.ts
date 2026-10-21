@@ -34,11 +34,17 @@ export default defineConfig({
               vite: {
                 build: {
                   outDir: "dist-electron",
-                  // preload грузится в sandbox без ESM — собираем как CommonJS
+                  // preload грузится в sandbox без ESM — собираем как CommonJS.
+                  // Важно: vite склеивает массивы, и к formats=["cjs"] добавляется
+                  // формат по умолчанию. Если оба писать в один файл, какой
+                  // останется — зависит от порядка сборки, и Electron иногда
+                  // получает файл с ESM-импортом, который не грузится.
+                  // Поэтому каждому формату — своё имя.
                   lib: {
                     entry: "electron/preload.ts",
                     formats: ["cjs"],
-                    fileName: () => "preload.cjs",
+                    fileName: (format) =>
+                      format === "cjs" ? "preload.cjs" : "preload.mjs",
                   },
                   rollupOptions: {
                     external: ["electron"],

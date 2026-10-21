@@ -25,7 +25,12 @@ import Store from "electron-store";
 import log from "electron-log";
 import { AgentApiHandle, startAgentApi } from "./agent-api";
 import { DiscordRpc } from "./discord-rpc";
-import { importCookiesFromConfig, setConfigValue, watchSessionFile } from "./session-sync";
+import {
+  clearSessionCookies,
+  importCookiesFromConfig,
+  setConfigValue,
+  watchSessionFile,
+} from "./session-sync";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 
@@ -2282,9 +2287,11 @@ if (!hasSingleInstanceLock) {
 
     watchSessionFile(store, (cookieHeader) => {
       if (!cookieHeader) {
-        // В другой версии вышел из аккаунта — выходим и здесь.
-        setStore("loggedIn", false);
-        mainWindow?.webContents.send("logged-out");
+        // В другой версии вышли из аккаунта — чистим сессию и выходим здесь.
+        void clearSessionCookies().then(() => {
+          setStore("loggedIn", false);
+          mainWindow?.webContents.send("logged-out");
+        });
         return;
       }
       mainWindow?.webContents.send("auth-success", cookieHeader);
