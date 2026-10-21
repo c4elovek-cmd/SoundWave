@@ -11,10 +11,14 @@
     "dev": "vite",
     "build": "vite build",
     "electron": "vite build && electron .",
-    "package": "vite build && electron-builder --win nsis portable"
+    "package": "vite build && electron-builder --win nsis portable",
+    "tauri": "tauri",
+    "tauri:dev": "set \"SOUNDWAVE_TAURI=1\" && tauri dev",
+    "tauri:build": "set \"SOUNDWAVE_TAURI=1\" && tauri build"
   },
   "dependencies": {
     "@phosphor-icons/react": "^2.1.7",
+    "@tauri-apps/api": "^2.12.4",
     "electron-log": "^5.3.0",
     "electron-store": "^10.1.0",
     "hls.js": "^1.7.3",
@@ -76,6 +80,7 @@
     }
   },
   "devDependencies": {
+    "@tauri-apps/cli": "^2.12.3",
     "@types/node": "^26.6.5",
     "@types/react": "^18.3.18",
     "@types/react-dom": "^18.3.5",
