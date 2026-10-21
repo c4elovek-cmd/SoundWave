@@ -52,5 +52,12 @@ jobs:
           } else {
             gh release create $tag @assets --generate-notes --title "SoundWave $tag"
           }
+
+          # gh иногда оставляет рядом черновик с тем же тегом — убираем его
+          $drafts = gh api "repos/$env:GITHUB_REPOSITORY/releases" --jq ".[] | select(.draft == true and .tag_name == `"$tag`") | .id"
+          foreach ($id in $drafts) {
+            Write-Output "Удаляем черновик $id"
+            gh api -X DELETE "repos/$env:GITHUB_REPOSITORY/releases/$id"
+          }
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
