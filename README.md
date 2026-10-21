@@ -5,7 +5,18 @@
 ![status](https://img.shields.io/badge/status-MVP-ff5500)
 ![screenshot](docs/screenshot.png)
 
-![stack](https://img.shields.io/badge/Electron%20%2B%20React%20%2B%20TS-ff5500)
+![stack](https://img.shields.io/badge/Tauri%20%2B%20Rust%20%2B%20React%20%2B%20TS-ff5500)
+
+## Две версии
+
+| Версия | Ветка | Тег релиза | Установщик | Память |
+|--------|-------|------------|------------|--------|
+| **Rust (Tauri v2)** — основная | `rust` | `rust-v0.6.0` | ~3 МБ | ~50 МБ |
+| Electron — поддерживаемая | `main` | `v0.5.2` | ~86 МБ | ~200 МБ |
+
+Интерфейс у них один и тот же — React-код не менялся, Electron-слой
+заменён на Rust-команды за мостом `window.electronAPI`. Всё, что работает
+в одной версии, работает и в другой.
 
 ## Что внутри
 
@@ -44,12 +55,17 @@
 
 | Слой | Технология |
 |------|-----------|
-| Оболочка | Electron 33 |
+| Оболочка | Tauri v2 (Rust) |
+| Бэкенд | Rust: `reqwest` (API SoundCloud), `axum` (локальный API), свой клиент Discord RPC |
 | Фронтенд | React 18 + TypeScript + Vite |
 | Стейт | Zustand |
 | Аудио | HTML5 `<audio>` + hls.js (для HLS-потоков) |
 | Иконки | Phosphor Icons |
-| Сборка | vite-plugin-electron |
+| Сборка | `tauri build` (NSIS) |
+
+> Интерфейс — тот же React-код, что и в Electron-версии: мост `window.electronAPI`
+> собран поверх Tauri-команд (`src/lib/tauriBridge.ts`), поэтому компоненты
+> менять не пришлось. Electron-версия осталась в ветке `main`, порт на Rust — в `rust`.
 
 ## Как это работает без официального API
 
@@ -245,24 +261,43 @@ npm run package
 # установка
 npm install
 
-# сборка и запуск
-npm run electron
+# сборка и запуск (Rust-версия)
+npm run tauri:dev
 ```
 
 Для разработки с горячей перезагрузкой:
 
 ```bash
-npm run dev        # vite dev-сервер (только UI)
+npm run dev              # vite dev-сервер (только UI)
+npm run tauri:dev        # приложение на Rust с горячей перезагрузкой
+npm run tauri:build      # релизная сборка + инсталлятор NSIS
+```
+
+Electron-версия (ветка `main`) запускается как раньше:
+
+```bash
+npm run electron
 ```
 
 ## Структура
 
 ```
-electron/
-  main.ts            # главное окно, трей, медиа-клавиши, окно входа, API-прокси, IPC
-  preload.ts         # безопасный мост contextBridge
-  agent-api.ts       # локальный HTTP-сервер для агентов
-  discord-rpc.ts     # клиент Discord Rich Presence (именованный канал)
+src-tauri/
+  src/
+    lib.rs             # команды Tauri, трей, окно, вход, настройки
+    soundcloud.rs      # клиент API SoundCloud: client_id, поток, троттлинг
+    lyrics.rs          # Genius и LRCLIB: текст песни и тайминги караоке
+    agent_api.rs       # локальный HTTP-сервер для агентов (axum)
+    discord.rs         # клиент Discord Rich Presence (именованный канал)
+    session.rs         # cookies: разбор, вход, OAuth-токен
+    fonts.rs           # свои шрифты: импорт, data-URL, base64
+    config.rs          # настройки (общий файл с Electron-версией)
+  tests/stream.rs      # живая проверка client_id и ссылки на аудио
+electron/              # прежняя реализация на Electron (ветка main)
+  main.ts              # главное окно, трей, медиа-клавиши, окно входа, API-прокси, IPC
+  preload.ts           # безопасный мост contextBridge
+  agent-api.ts         # локальный HTTP-сервер для агентов
+  discord-rpc.ts       # клиент Discord Rich Presence (именованный канал)
 src/
   App.tsx            # роутинг видов, топ-бар, панель очереди
   components/
@@ -282,6 +317,7 @@ src/
     ManualAuthPage.tsx # ручной импорт cookies (в том же окне)
   stores/            # zustand: appStore, playerStore, waveStore, lyricsStore, settingsStore
   lib/
+    tauriBridge.ts    # мост window.electronAPI поверх Tauri-команд
     soundcloud-api.ts # обёртка внутреннего API через IPC
     wave.ts           # движок рекомендаций «Моей волны»
     lyrics.ts         # разбор LRC, выравнивание и тайминги караоке

@@ -1,0 +1,72 @@
+name: Release Tauri
+
+# Сборка версии на Rust (Tauri v2). Тег вида rust-v0.6.0.
+on:
+  push:
+    tags:
+      - "rust-v*"
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    name: Сборка установщика Windows (Rust)
+    runs-on: windows-latest
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+
+      - name: Установка зависимостей
+        run: npm ci
+
+      - name: Проверка типов
+        run: npx tsc --noEmit
+
+      - name: Установка Rust
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Кэш сборки Rust
+        uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: src-tauri
+
+      - name: Сборка и упаковка
+        run: npm run tauri:build
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Прикрепление файлов к релизу
+        shell: pwsh
+        run: |
+          $tag = "${{ github.ref_name }}"
+          $assets = @(Get-ChildItem -Path src-tauri/target/release/bundle/nsis -File | Where-Object { $_.Extension -eq ".exe" } | ForEach-Object { $_.FullName })
+          if (-not $assets) { throw "Артефакты не найдены в src-tauri/target/release/bundle/nsis" }
+
+          $releaseTag = $tag -replace '^rust-', ''
+          $version = ($releaseTag -replace '^v', '')
+
+          gh release view $releaseTag *> $null
+          if ($LASTEXITCODE -eq 0) {
+            Write-Output "Релиз $releaseTag уже есть — обновляем файлы"
+            gh release upload $releaseTag @assets --clobber
+            gh release edit $releaseTag --draft=false --title "SoundWave $releaseTag (Rust)"
+          } else {
+            gh release create $releaseTag @assets --generate-notes --title "SoundWave $releaseTag (Rust)" --notes "Версия на Rust (Tauri v2). Размер установщика в разы меньше, памяти тоже."
+          }
+
+          $drafts = gh api "repos/$env:GITHUB_REPOSITORY/releases" --jq ".[] | select(.draft == true and .tag_name == `"$releaseTag`") | .id"
+          foreach ($id in $drafts) {
+            Write-Output "Удаляем черновик $id"
+            gh api -X DELETE "repos/$env:GITHUB_REPOSITORY/releases/$id"
+          }
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}

@@ -48,9 +48,9 @@ jobs:
           if ($LASTEXITCODE -eq 0) {
             Write-Output "Релиз $tag уже есть — обновляем файлы"
             gh release upload $tag @assets --clobber
-            gh release edit $tag --draft=false --title "SoundWave $tag"
+            gh release edit $tag --draft=false --title "SoundWave $tag (Electron)"
           } else {
-            gh release create $tag @assets --generate-notes --title "SoundWave $tag"
+            gh release create $tag @assets --generate-notes --title "SoundWave $tag (Electron)" --notes "Версия на Electron. Версия на Rust (Tauri v2) — в тегах rust-v*."
           }
 
           # gh иногда оставляет рядом черновик с тем же тегом — убираем его
