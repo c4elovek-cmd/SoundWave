@@ -6,6 +6,7 @@
 
 mod config;
 pub mod discord;
+pub mod fonts;
 pub mod lyrics;
 pub mod session;
 pub mod soundcloud;
@@ -642,6 +643,41 @@ fn set_close_to_tray(value: bool) -> Result<bool, String> {
     Ok(true)
 }
 
+// --- Свои шрифты -----------------------------------------------------------
+
+/// Список своих шрифтов с data-URL — их регистрирует интерфейс.
+#[tauri::command]
+fn list_custom_fonts() -> Vec<Value> {
+    fonts::list_entries()
+}
+
+/// Импорт шрифта: диалог выбора файла, копирование, запись в настройки.
+#[tauri::command]
+async fn import_custom_font(app: AppHandle) -> Option<Value> {
+    use tauri_plugin_dialog::DialogExt;
+
+    let (sender, receiver) = tokio::sync::oneshot::channel();
+
+    app.dialog()
+        .file()
+        .set_title("Выбери файл шрифта")
+        .add_filter("Шрифты", &fonts::FONT_EXTENSIONS)
+        .pick_file(move |path| {
+            let _ = sender.send(path);
+        });
+
+    let path = receiver.await.ok().flatten()?;
+    let path = path.into_path().ok()?;
+
+    fonts::import_font(&path).ok()
+}
+
+/// Удаление шрифта: все начертания семейства.
+#[tauri::command]
+fn remove_custom_font(family: String) -> bool {
+    fonts::remove_font(&family)
+}
+
 // --- Discord Rich Presence -------------------------------------------------
 
 /// Текущий Client ID: свой из настроек или вшитый в сборку.
@@ -908,6 +944,7 @@ fn window_start_dragging(app: tauri::AppHandle) {
 pub fn run() {
     tauri::Builder::default()
         .plugin(tauri_plugin_opener::init())
+        .plugin(tauri_plugin_dialog::init())
         .plugin(tauri_plugin_log::Builder::new().build())
         .manage(AppState {
             sc: SoundCloud::new(),
@@ -944,6 +981,9 @@ pub fn run() {
             toggle_like,
             get_lyrics,
             get_synced_lyrics,
+            list_custom_fonts,
+            import_custom_font,
+            remove_custom_font,
             discord_status,
             set_discord_config,
             set_discord_presence,

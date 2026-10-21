@@ -161,9 +161,32 @@ export function createTauriBridge(): Window["electronAPI"] {
     sendAgentResponse: () => {},
 
     // --- Свои шрифты ---
-    listCustomFonts: async () => [],
-    importCustomFont: async () => null,
-    removeCustomFont: async () => false,
+    listCustomFonts: () =>
+      invoke<
+        {
+          id: string;
+          name: string;
+          family: string;
+          display: string;
+          weight: number;
+          file: string;
+          mime: string;
+          dataUrl: string;
+        }[]
+      >("list_custom_fonts"),
+    importCustomFont: () =>
+      invoke<{
+        id: string;
+        name: string;
+        family: string;
+        display: string;
+        weight: number;
+        file: string;
+        mime: string;
+        dataUrl: string;
+      } | null>("import_custom_font"),
+    removeCustomFont: (family: string) =>
+      invoke<boolean>("remove_custom_font", { family }),
 
     // --- Discord Rich Presence ---
     discordStatus: () =>

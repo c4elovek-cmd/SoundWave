@@ -9,11 +9,16 @@ use std::path::PathBuf;
 
 use serde_json::Value;
 
-fn config_dir() -> PathBuf {
+/// Папка с данными приложения: конфиг, шрифты, логи.
+pub fn data_dir() -> PathBuf {
     if let Ok(dir) = std::env::var("APPDATA") {
         return PathBuf::from(dir).join("soundwave");
     }
     PathBuf::from(".")
+}
+
+fn config_dir() -> PathBuf {
+    data_dir()
 }
 
 fn config_path() -> PathBuf {
