@@ -30,6 +30,47 @@ mod ffi {
     }
 }
 
+/// Растягивает содержимое окна на всю площадь, включая рамку.
+///
+/// У frameless-окна Windows оставляет по краям полосу под изменение размера
+/// (около 8 пикселей). Она рисуется системой и выглядит как белая кайма.
+/// Webview лежит только в клиентской области, поэтому сдвигаем его вверх и
+/// влево и растягиваем — кайма оказывается под интерфейсом.
+#[cfg(windows)]
+pub fn cover_frame(window: &Window) {
+    use windows_sys::Win32::UI::WindowsAndMessaging::{
+        FindWindowExW, SetWindowPos, HWND_TOP, SWP_NOACTIVATE, SWP_NOZORDER,
+    };
+
+    let Ok(hwnd) = window.hwnd() else {
+        return;
+    };
+    let Ok(size) = window.outer_size() else {
+        return;
+    };
+
+    unsafe {
+        // Ищем webview среди потомков окна.
+        let mut child = FindWindowExW(hwnd.0, std::ptr::null_mut(), std::ptr::null(), std::ptr::null());
+        while !child.is_null() {
+            SetWindowPos(
+                child,
+                HWND_TOP,
+                -8,
+                -4,
+                size.width as i32,
+                size.height as i32,
+                SWP_NOACTIVATE | SWP_NOZORDER,
+            );
+            child = FindWindowExW(hwnd.0, child, std::ptr::null(), std::ptr::null());
+        }
+    }
+}
+
+/// На других платформах рамки нет.
+#[cfg(not(windows))]
+pub fn cover_frame(_window: &Window) {}
+
 /// Применяет скругление к окну.
 #[cfg(windows)]
 pub fn apply(window: &Window, radius: i32) {

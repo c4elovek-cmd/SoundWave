@@ -23,6 +23,7 @@ import { randomBytes } from "crypto";
 import { fileURLToPath } from "url";
 import Store from "electron-store";
 import log from "electron-log";
+import { autoUpdater } from "electron-updater";
 import { AgentApiHandle, startAgentApi } from "./agent-api";
 import { DiscordRpc } from "./discord-rpc";
 import {
@@ -2213,6 +2214,47 @@ function setupIPC() {  // Получить сохранённые настрой
     return true;
   });
 
+  // Автообновление: проверяем релиз на GitHub и качаем новую версию.
+  ipcMain.handle("check-for-updates", async () => {
+    if (!app.isPackaged) {
+      return {
+        ok: false,
+        error: "Обновления доступны только в установленной версии",
+      };
+    }
+
+    try {
+      const result = await autoUpdater.checkForUpdates();
+      const version = result?.updateInfo?.version ?? "";
+      const current = app.getVersion();
+
+      if (!version || version === current) {
+        return { ok: true, upToDate: true, current };
+      }
+
+      return { ok: true, upToDate: false, version, current };
+    } catch (e) {
+      const message = e instanceof Error ? e.message : "Не удалось проверить обновления";
+      log.warn("Проверка обновлений не удалась:", message);
+      return { ok: false, error: message };
+    }
+  });
+
+  // Установить скачанное обновление и перезапустить приложение.
+  ipcMain.handle("install-update", async () => {
+    if (!app.isPackaged) {
+      return { ok: false, error: "Обновления доступны только в установленной версии" };
+    }
+
+    try {
+      autoUpdater.quitAndInstall();
+      return { ok: true };
+    } catch (e) {
+      const message = e instanceof Error ? e.message : "Не удалось установить обновление";
+      return { ok: false, error: message };
+    }
+  });
+
   ipcMain.handle(
     "log-action",
     (_event, action: string, details: Record<string, unknown> = {}) => {
@@ -2268,6 +2310,25 @@ if (!hasSingleInstanceLock) {
       const clientId = getDiscordClientId();
       if (clientId) void discord.connect(clientId);
     }
+
+    // Автообновление: следим за релизом и сообщаем интерфейсу.
+    autoUpdater.autoDownload = true;
+    autoUpdater.autoInstallOnAppQuit = true;
+
+    autoUpdater.on("update-available", (info) => {
+      log.info("Доступно обновление:", info.version);
+      mainWindow?.webContents.send("update-available", { version: info.version });
+    });
+
+    autoUpdater.on("update-downloaded", (info) => {
+      log.info("Обновление скачано:", info.version);
+      mainWindow?.webContents.send("update-downloaded", { version: info.version });
+    });
+
+    autoUpdater.on("error", (e) => {
+      log.warn("Автообновление не сработало:", e.message);
+      mainWindow?.webContents.send("update-error", { message: e.message });
+    });
 
     // Сессия общая с Rust-версией: если там выполнили вход, подхватываем
     // его здесь, и наоборот — вход в этой версии увидит Rust.

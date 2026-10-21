@@ -145,6 +145,25 @@ declare global {
       }>;
       openUserData: () => Promise<boolean>;
       setCloseToTray: (value: boolean) => Promise<boolean>;
+
+      // Автообновление
+      checkForUpdates: () => Promise<{
+        ok: boolean;
+        upToDate?: boolean;
+        version?: string;
+        current?: string;
+        error?: string;
+      }>;
+      installUpdate: () => Promise<{ ok: boolean; error?: string }>;
+      onUpdateAvailable: (
+        callback: (info: { version: string }) => void
+      ) => () => void;
+      onUpdateDownloaded: (
+        callback: (info: { version: string }) => void
+      ) => () => void;
+      onUpdateError: (
+        callback: (info: { message: string }) => void
+      ) => () => void;
       logAction: (
         action: string,
         details?: Record<string, unknown>

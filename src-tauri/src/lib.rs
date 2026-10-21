@@ -363,6 +363,26 @@ fn login_helpers_script(origin: &str) -> String {
     )
 }
 
+/// Скрипт, который открывает нужный маршрут приложения в окне входа.
+///
+/// Путь с `#` нельзя передать в WebviewUrl: Tauri склеивает его с адресом
+/// приложения как обычный путь, и страница не открывается. Поэтому грузим
+/// index.html, а маршрут ставим скриптом инициализации — только для страниц
+/// самого приложения (на soundcloud.com скрипт ничего не трогает).
+fn auth_route_script(origin: &str, route: &str) -> String {
+    format!(
+        r#"
+(function () {{
+  try {{
+    if (location.origin === "{origin}" && location.hash !== "{route}") {{
+      location.replace(location.pathname + location.search + "{route}");
+    }}
+  }} catch (e) {{}}
+}})();
+"#
+    )
+}
+
 /// Создаёт окно входа (или приводит его в порядок) и возвращает его.
 fn ensure_auth_window(app: &AppHandle, route: &str) -> Result<tauri::WebviewWindow, String> {
     if let Some(win) = app.get_webview_window(AUTH_WINDOW) {
@@ -372,18 +392,18 @@ fn ensure_auth_window(app: &AppHandle, route: &str) -> Result<tauri::WebviewWind
     }
 
     let origin = app_origin(app);
-    let script = login_helpers_script(&origin);
+    let script = format!(
+        "{}{}",
+        login_helpers_script(&origin),
+        auth_route_script(&origin, route)
+    );
 
-    WebviewWindowBuilder::new(
-        app,
-        AUTH_WINDOW,
-        WebviewUrl::App(format!("index.html{route}").into()),
-    )
-    .title("Вход в SoundCloud")
-    .inner_size(520.0, 700.0)
-    .initialization_script(&script)
-    .build()
-    .map_err(|e| e.to_string())
+    WebviewWindowBuilder::new(app, AUTH_WINDOW, WebviewUrl::App("index.html".into()))
+        .title("Вход в SoundCloud")
+        .inner_size(520.0, 700.0)
+        .initialization_script(&script)
+        .build()
+        .map_err(|e| e.to_string())
 }
 
 /// Читает cookies SoundCloud из хранилища WebView2.
@@ -419,15 +439,18 @@ fn finish_login(app: &AppHandle, pairs: &[session::CookiePair]) -> Result<(), St
 }
 
 /// Окно выбора способа входа.
+///
+/// Команда асинхронная: создание окна идёт через главный поток, а
+/// синхронная команда выполнялась бы на нём же — и ждала бы сама себя.
 #[tauri::command]
-fn open_auth_window(app: AppHandle) -> Result<bool, String> {
+async fn open_auth_window(app: AppHandle) -> Result<bool, String> {
     ensure_auth_window(&app, "#/auth")?;
     Ok(true)
 }
 
 /// Ручной вход: окно с полем для cookies.
 #[tauri::command]
-fn open_manual_login(app: AppHandle) -> Result<bool, String> {
+async fn open_manual_login(app: AppHandle) -> Result<bool, String> {
     ensure_auth_window(&app, "#/auth/manual")?;
     Ok(true)
 }
@@ -1045,6 +1068,95 @@ fn register_media_keys(app: &AppHandle) {
     }
 }
 
+// --- Автообновление --------------------------------------------------------
+
+/// Проверить обновления: сравниваем текущую версию с последним релизом.
+#[tauri::command]
+async fn check_for_updates(app: AppHandle) -> Value {
+    use tauri_plugin_updater::UpdaterExt;
+
+    let current = app.package_info().version.to_string();
+
+    let updater = match app.updater() {
+        Ok(updater) => updater,
+        Err(e) => {
+            return serde_json::json!({
+                "ok": false,
+                "error": format!("Обновления недоступны: {e}"),
+            })
+        }
+    };
+
+    match updater.check().await {
+        Ok(Some(update)) => serde_json::json!({
+            "ok": true,
+            "upToDate": false,
+            "version": update.version,
+            "current": current,
+        }),
+        Ok(None) => serde_json::json!({
+            "ok": true,
+            "upToDate": true,
+            "current": current,
+        }),
+        Err(e) => serde_json::json!({
+            "ok": false,
+            "error": format!("Не удалось проверить обновления: {e}"),
+        }),
+    }
+}
+
+/// Скачать и установить обновление, затем перезапустить приложение.
+#[tauri::command]
+async fn install_update(app: AppHandle) -> Value {
+    use tauri_plugin_updater::UpdaterExt;
+
+    let updater = match app.updater() {
+        Ok(updater) => updater,
+        Err(e) => {
+            return serde_json::json!({
+                "ok": false,
+                "error": format!("Обновления недоступны: {e}"),
+            })
+        }
+    };
+
+    let update = match updater.check().await {
+        Ok(Some(update)) => update,
+        Ok(None) => {
+            return serde_json::json!({
+                "ok": false,
+                "error": "Обновлений нет",
+            })
+        }
+        Err(e) => {
+            return serde_json::json!({
+                "ok": false,
+                "error": format!("Не удалось получить обновление: {e}"),
+            })
+        }
+    };
+
+    let downloaded = update
+        .download_and_install(|_, _| {}, || {})
+        .await;
+
+    match downloaded {
+        Ok(()) => {
+            // Приложение перезапустится само — ответ уже не дойдёт.
+            app.restart();
+            #[allow(unreachable_code)]
+            {
+                serde_json::json!({ "ok": true })
+            }
+        }
+        Err(e) => serde_json::json!({
+            "ok": false,
+            "error": format!("Не удалось установить обновление: {e}"),
+        }),
+    }
+}
+
 // --- Окно ------------------------------------------------------------------
 
 fn main_window(app: &tauri::AppHandle) -> Option<tauri::WebviewWindow> {
@@ -1115,6 +1227,7 @@ pub fn run() {
         .plugin(tauri_plugin_opener::init())
         .plugin(tauri_plugin_dialog::init())
         .plugin(tauri_plugin_global_shortcut::Builder::new().build())
+        .plugin(tauri_plugin_updater::Builder::new().build())
         .plugin(tauri_plugin_log::Builder::new().build())
         .manage(AppState {
             sc: SoundCloud::new(),
@@ -1133,6 +1246,7 @@ pub fn run() {
                 use tauri::webview::Color;
 
                 let _ = win.set_background_color(Some(Color(18, 18, 18, 255)));
+                transparent::hide_border(&win.as_ref().window());
                 transparent::paint_frame(&win.as_ref().window(), 0x00121212);
                 corners::apply_webview(&win, corners::CORNER_RADIUS);
             }
@@ -1187,6 +1301,8 @@ pub fn run() {
             remove_custom_font,
             agent_api_config,
             send_agent_response,
+            check_for_updates,
+            install_update,
             open_user_data,
             minimize_to_tray,
             discord_status,

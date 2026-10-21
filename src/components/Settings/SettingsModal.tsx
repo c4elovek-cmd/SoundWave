@@ -131,6 +131,60 @@ export default function SettingsModal() {
   const [appVersion, setAppVersion] = useState("");
   const [portDraft, setPortDraft] = useState(String(settings.agentApiPort));
 
+  // Автообновление: состояние проверки и скачивания.
+  const [updateState, setUpdateState] = useState<
+    | { kind: "idle" }
+    | { kind: "checking" }
+    | { kind: "uptodate"; current: string }
+    | { kind: "available"; version: string }
+    | { kind: "downloaded"; version: string }
+    | { kind: "error"; message: string }
+  >({ kind: "idle" });
+
+  useEffect(() => {
+    const offAvailable = window.electronAPI?.onUpdateAvailable?.((info) => {
+      setUpdateState({ kind: "available", version: info.version });
+    });
+    const offDownloaded = window.electronAPI?.onUpdateDownloaded?.((info) => {
+      setUpdateState({ kind: "downloaded", version: info.version });
+    });
+    const offError = window.electronAPI?.onUpdateError?.((info) => {
+      setUpdateState({ kind: "error", message: info.message });
+    });
+
+    return () => {
+      offAvailable?.();
+      offDownloaded?.();
+      offError?.();
+    };
+  }, []);
+
+  const checkUpdates = async () => {
+    setUpdateState({ kind: "checking" });
+
+    const result = await window.electronAPI?.checkForUpdates?.();
+
+    if (!result) {
+      setUpdateState({ kind: "error", message: "Проверка не поддерживается" });
+      return;
+    }
+
+    if (!result.ok) {
+      setUpdateState({
+        kind: "error",
+        message: result.error ?? "Не удалось проверить обновления",
+      });
+      return;
+    }
+
+    if (result.upToDate) {
+      setUpdateState({ kind: "uptodate", current: result.current ?? "" });
+      return;
+    }
+
+    setUpdateState({ kind: "available", version: result.version ?? "" });
+  };
+
   const lyricsFontStack = useMemo(
     () => fontStack(settings.lyricsFont, settings.customFonts),
     [settings.lyricsFont, settings.customFonts]
@@ -734,6 +788,54 @@ export default function SettingsModal() {
 
             <Row label="Версия">
               <span className="settings-value">SoundWave {appVersion || "—"}</span>
+            </Row>
+
+            <Row
+              label="Обновления"
+              hint="Проверяет GitHub и ставит свежую версию"
+            >
+              <div className="settings-update">
+                {updateState.kind === "checking" && (
+                  <span className="settings-value">Проверяем…</span>
+                )}
+                {updateState.kind === "uptodate" && (
+                  <span className="settings-value">
+                    Установлена свежая версия{updateState.current ? ` (${updateState.current})` : ""}
+                  </span>
+                )}
+                {updateState.kind === "available" && (
+                  <span className="settings-value">
+                    Доступно обновление {updateState.version} — скачиваем
+                  </span>
+                )}
+                {updateState.kind === "downloaded" && (
+                  <span className="settings-value">
+                    Обновление {updateState.version} скачано
+                  </span>
+                )}
+                {updateState.kind === "error" && (
+                  <span className="settings-value" title={updateState.message}>
+                    {updateState.message}
+                  </span>
+                )}
+
+                {updateState.kind === "downloaded" ? (
+                  <button
+                    className="settings-button"
+                    onClick={() => void window.electronAPI?.installUpdate?.()}
+                  >
+                    Установить и перезапустить
+                  </button>
+                ) : (
+                  <button
+                    className="settings-button"
+                    onClick={() => void checkUpdates()}
+                    disabled={updateState.kind === "checking"}
+                  >
+                    Проверить обновления
+                  </button>
+                )}
+              </div>
             </Row>
 
             <Row

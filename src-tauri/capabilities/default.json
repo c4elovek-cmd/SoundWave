@@ -11,6 +11,7 @@
     "opener:default",
     "dialog:default",
     "global-shortcut:default",
+    "updater:default",
     "log:default"
   ]
 }

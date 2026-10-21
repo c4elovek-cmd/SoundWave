@@ -187,6 +187,24 @@ export function createTauriBridge(): Window["electronAPI"] {
       }>("get_synced_lyrics", { title, artist, duration }),
     openExternal: (url: string) => invoke<boolean>("open_external", { url }),
 
+    // --- Автообновление ---
+    checkForUpdates: () =>
+      invoke<{
+        ok: boolean;
+        upToDate?: boolean;
+        version?: string;
+        current?: string;
+        error?: string;
+      }>("check_for_updates"),
+    installUpdate: () =>
+      invoke<{ ok: boolean; error?: string }>("install_update"),
+    onUpdateAvailable: (callback: (info: { version: string }) => void) =>
+      subscribe<{ version: string }>("update-available", callback),
+    onUpdateDownloaded: (callback: (info: { version: string }) => void) =>
+      subscribe<{ version: string }>("update-downloaded", callback),
+    onUpdateError: (callback: (info: { message: string }) => void) =>
+      subscribe<{ message: string }>("update-error", callback),
+
     // --- Локальный API для агентов ---
     onAgentRequest: (callback: (request: { id: string; type: string; payload?: unknown }) => void) =>
       subscribe<{ id: string; type: string; payload?: unknown }>(

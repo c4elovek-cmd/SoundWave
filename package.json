@@ -21,6 +21,7 @@
     "@tauri-apps/api": "^2.12.4",
     "electron-log": "^5.3.0",
     "electron-store": "^10.1.0",
+    "electron-updater": "^6.8.9",
     "hls.js": "^1.7.3",
     "react": "^18.3.1",
     "react-dom": "^18.3.1",
@@ -30,6 +31,13 @@
     "appId": "com.c4elovek.soundwave",
     "productName": "SoundWave",
     "copyright": "Copyright © 2026 c4elovek-cmd",
+    "publish": [
+      {
+        "provider": "github",
+        "owner": "c4elovek-cmd",
+        "repo": "SoundWave"
+      }
+    ],
     "directories": {
       "output": "release",
       "buildResources": "resources"
@@ -72,7 +80,7 @@
       "allowToChangeInstallationDirectory": true,
       "createDesktopShortcut": true,
       "createStartMenuShortcut": true,
-      "shortcutName": "SoundWave",
+      "shortcutName": "SoundWave (Electron)",
       "artifactName": "SoundWave-Setup-${version}.${ext}"
     },
     "portable": {

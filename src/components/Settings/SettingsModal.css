@@ -659,3 +659,20 @@
   line-height: 1.5;
   color: var(--text-secondary);
 }
+
+/* Обновления: статус и кнопка рядом */
+.settings-update {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  justify-content: flex-end;
+  flex-wrap: wrap;
+}
+
+.settings-update .settings-value {
+  text-align: right;
+  max-width: 320px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
