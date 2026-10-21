@@ -1498,7 +1498,9 @@ function setupIPC() {  // Получить сохранённые настрой
     // Фон окна совпадает с фоном приложения — тогда скруглённые углы
     // не выделяются тёмной рамкой.
     if (base && mainWindow && !mainWindow.isDestroyed()) {
-      mainWindow.setBackgroundColor(base === "light" ? "#ffffff" : "#121212");
+      // Фон окна не трогаем: окно прозрачное, цвет рисует сам интерфейс.
+// Непрозрачный фон здесь отменял бы прозрачность и ломал скруглённые углы.
+      mainWindow.setBackgroundColor("#00000000");
     }
     return true;
   });
