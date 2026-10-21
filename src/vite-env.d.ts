@@ -41,7 +41,8 @@ declare global {
       ) => Promise<{ ok: boolean; liked?: boolean; error?: string }>;
       getLyrics: (
         title: string,
-        artist: string
+        artist: string,
+        description?: string
       ) => Promise<{
         found: boolean;
         title?: string;

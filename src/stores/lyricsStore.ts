@@ -141,7 +141,8 @@ export const useLyricsStore = create<LyricsState>((set, get) => ({
 
       const response = await window.electronAPI.getLyrics(
         track.title,
-        track.user?.username ?? ""
+        track.user?.username ?? "",
+        track.description ?? ""
       );
 
       if (currentRequest !== requestId) return;

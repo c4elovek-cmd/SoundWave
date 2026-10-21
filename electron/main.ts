@@ -575,6 +575,44 @@ function artistVariants(artist: string): string[] {
   return [...variants];
 }
 
+/**
+ * Кандидаты названия из описания трека.
+ *
+ * В выгрузках часто пишут оригинальную песню: «I Want (Original Song)», «Lyrics: …»
+ * или просто первая строка. По ним можно найти текст, даже если перезалитое
+ * название на Genius не встречается.
+ */
+function titleCandidatesFromDescription(description: string | undefined): string[] {
+  if (!description) return [];
+
+  const text = description.trim();
+  if (!text || text.length > 800) return [];
+
+  const result = new Set<string>();
+  const add = (value: string) => {
+    const trimmed = value.trim().replace(/^["'«]|["'»]$/g, "");
+    if (trimmed.length > 2 && trimmed.length < 120) result.add(trimmed);
+  };
+
+  // Текст в кавычках: «I Want» — Original Song
+  for (const match of text.matchAll(/["'«]([^"'»\n]{2,80})["'»]/g)) add(match[1]);
+
+  // Строки вида «Original song: …» / «Оригинал: …»
+  for (const match of text.matchAll(
+    /(?:original|оригинал|source|lyrics|текст|слова)\s*[:\-—]\s*([^\n]{2,80})/gi
+  )) {
+    add(match[1]);
+  }
+
+  // Первая строка описания, если она короткая и похожа на название
+  const firstLine = text.split("\n")[0]?.trim() ?? "";
+  if (firstLine && firstLine.length <= 80 && !/[.!?]/.test(firstLine.slice(0, 40))) {
+    add(firstLine);
+  }
+
+  return [...result].slice(0, 4);
+}
+
 /** Насколько результат поиска похож на нужный трек. */
 function scoreGeniusSong(
   song: any,
@@ -594,31 +632,33 @@ function scoreGeniusSong(
     GENIUS_TRANSLATION_MARKERS.some((marker) => songArtist.includes(marker));
   if (isTranslation && !wantArtists.includes(songArtist)) return -100;
 
+  // Оценка названия. Короткие названия вроде «I WANT» не считаем совпадением
+  // по «входит в» — иначе подставляется совсем другая песня.
+  const titleScore = (wantTitle: string): number => {
+    if (!wantTitle) return 0;
+    if (songTitle === wantTitle) return 10;
+
+    const words = wantTitle.split(" ").filter((word) => word.length > 2);
+    if (words.length < 2 || wantTitle.length < 8) return 0;
+
+    if (songTitle.includes(wantTitle) || wantTitle.includes(songTitle)) return 6;
+
+    const matched = words.filter((word) => songTitle.includes(word)).length;
+    if (matched >= 2 && matched / words.length >= 0.5) return 3;
+
+    return 0;
+  };
+
+  const artistScore = (wantArtist: string): number => {
+    if (!wantArtist || !songArtist) return 0;
+    if (songArtist === wantArtist) return 8;
+    if (songArtist.includes(wantArtist) || wantArtist.includes(songArtist)) return 4;
+    return 0;
+  };
+
   let score = 0;
-
-  for (const wantTitle of wantTitles) {
-    if (songTitle === wantTitle) {
-      score = Math.max(score, 10);
-    } else if (songTitle.includes(wantTitle) || wantTitle.includes(songTitle)) {
-      score = Math.max(score, 6);
-    } else {
-      // Названия в SoundCloud часто содержат лишние приписки — сравниваем по словам.
-      const words = wantTitle.split(" ").filter((word) => word.length > 1);
-      if (words.length > 0) {
-        const matched = words.filter((word) => songTitle.includes(word)).length;
-        score = Math.max(score, (matched / words.length) * 3);
-      }
-    }
-  }
-
-  for (const wantArtist of wantArtists) {
-    if (!wantArtist || !songArtist) continue;
-    if (songArtist === wantArtist) {
-      score = Math.max(score, 8);
-    } else if (songArtist.includes(wantArtist) || wantArtist.includes(songArtist)) {
-      score = Math.max(score, 4);
-    }
-  }
+  for (const wantTitle of wantTitles) score = Math.max(score, titleScore(wantTitle));
+  for (const wantArtist of wantArtists) score = Math.max(score, artistScore(wantArtist));
 
   return score;
 }
@@ -643,8 +683,12 @@ async function fetchGenius(url: string, asJson: boolean): Promise<any> {
  * («face - юморсrст (hardteek / hardstyle)»), поэтому ищем по нескольким
  * вариантам названия и имени артиста.
  */
-async function findGeniusLyrics(title: string, artist: string): Promise<GeniusLyricsResult> {
-  const titles = titleVariants(title);
+async function findGeniusLyrics(
+  title: string,
+  artist: string,
+  description?: string
+): Promise<GeniusLyricsResult> {
+  const titles = [...titleVariants(title), ...titleCandidatesFromDescription(description)];
   const artists = artistVariants(artist);
 
   const queries: string[] = [];
@@ -699,7 +743,7 @@ async function findGeniusLyrics(title: string, artist: string): Promise<GeniusLy
   // Слишком слабые совпадения пропускаем: лучше честное «не найдено»,
   // чем текст совсем другой песни.
   for (const { song, score } of ranked.slice(0, 3)) {
-    if (score < 4) continue;
+    if (score < 5) continue;
 
     try {
       const html = await fetchGenius(song.url, false);
@@ -722,7 +766,11 @@ async function findGeniusLyrics(title: string, artist: string): Promise<GeniusLy
 }
 
 /** Кэш на 6 часов: тексты не меняются, а Genius не любит частые запросы. */
-async function getGeniusLyrics(title: string, artist: string): Promise<GeniusLyricsResult> {
+async function getGeniusLyrics(
+  title: string,
+  artist: string,
+  description?: string
+): Promise<GeniusLyricsResult> {
   const key = `${title.toLowerCase()}|${artist.toLowerCase()}`;
   const cached = geniusCache.get(key);
 
@@ -733,7 +781,7 @@ async function getGeniusLyrics(title: string, artist: string): Promise<GeniusLyr
   let result: GeniusLyricsResult;
 
   try {
-    result = await findGeniusLyrics(title, artist);
+    result = await findGeniusLyrics(title, artist, description);
   } catch (e) {
     log.warn("Genius: поиск не удался", e);
     // Ошибку сети не кэшируем — при следующем открытии попробуем снова.
@@ -1545,7 +1593,9 @@ function setupIPC() {  // Получить сохранённые настрой
         const clientId = await getClientId();
 
         const urn = `soundcloud:system-playlists:personalized-tracks:${userId}:${trackId}`;
-        const url = `${API_V2}/users/${userId}/system_playlist_likes/${urn}?client_id=${clientId}&app_locale=ru`;
+        const url =
+          `${API_V2}/users/${userId}/system_playlist_likes/${urn}` +
+          `?client_id=${clientId}&app_version=1792400581&app_locale=ru`;
 
         const res = await withScThrottle(async () =>
           fetch(url, {
@@ -1668,13 +1718,16 @@ function setupIPC() {  // Получить сохранённые настрой
   // через публичный поиск и разбираем страницу.
   ipcMain.handle(
     "genius-lyrics",
-    async (_event, payload: { title?: string; artist?: string }) => {
+    async (
+      _event,
+      payload: { title?: string; artist?: string; description?: string }
+    ) => {
       const title = String(payload?.title ?? "").trim();
       const artist = String(payload?.artist ?? "").trim();
 
       if (!title) return { found: false, error: "Не указано название трека" };
 
-      const genius = await getGeniusLyrics(title, artist);
+      const genius = await getGeniusLyrics(title, artist, payload?.description);
       if (genius.found) return genius;
 
       // Genius не знает такой трек — берём текст из LRCLIB.
