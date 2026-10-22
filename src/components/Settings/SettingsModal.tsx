@@ -129,6 +129,7 @@ export default function SettingsModal() {
     connected: boolean;
   } | null>(null);
   const [appVersion, setAppVersion] = useState("");
+  const [updateChannel, setUpdateChannel] = useState("stable");
   const [portDraft, setPortDraft] = useState(String(settings.agentApiPort));
 
   // Автообновление: состояние проверки и скачивания.
@@ -205,6 +206,10 @@ export default function SettingsModal() {
 
     void window.electronAPI?.getConfig?.().then((cfg) => {
       if (cfg && "version" in cfg) setAppVersion(String(cfg.version));
+
+    void window.electronAPI?.getUpdateChannel?.().then((channel) => {
+      if (channel) setUpdateChannel(channel);
+    });
     });
   }, []);
 
@@ -788,6 +793,36 @@ export default function SettingsModal() {
 
             <Row label="Версия">
               <span className="settings-value">SoundWave {appVersion || "—"}</span>
+            </Row>
+
+            <Row
+              label="Канал обновлений"
+              hint="stable — стабильные сборки, beta и alpha — ранние"
+            >
+              <div className="settings-channel">
+                {(["stable", "beta", "alpha"] as const).map((item) => (
+                  <button
+                    key={item}
+                    className={`settings-channel-item ${
+                      updateChannel === item ? "active" : ""
+                    }`}
+                    onClick={() => {
+                      if (updateChannel === item) return;
+                      setUpdateChannel(item);
+                      void window.electronAPI?.setUpdateChannel?.(item);
+                    }}
+                    title={
+                      item === "stable"
+                        ? "Только проверенные сборки"
+                        : item === "beta"
+                          ? "Сборки с новыми функциями"
+                          : "Самые свежие изменения, возможны ошибки"
+                    }
+                  >
+                    {item}
+                  </button>
+                ))}
+              </div>
             </Row>
 
             <Row

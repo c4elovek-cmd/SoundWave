@@ -199,6 +199,12 @@ if (isExternalPage) {
 
     // Автообновление
     checkForUpdates: () => ipcRenderer.invoke("check-for-updates"),
+    // Канал обновлений: stable, beta или alpha
+    setUpdateChannel: (channel: string) =>
+      ipcRenderer.invoke("set-update-channel", channel),
+    // Текущий канал обновлений
+    getUpdateChannel: () => ipcRenderer.invoke("get-update-channel"),
+
     installUpdate: () => ipcRenderer.invoke("install-update"),
     onUpdateAvailable: (callback: (info: { version: string }) => void) => {
       const listener = (_event: unknown, info: { version: string }) => callback(info);

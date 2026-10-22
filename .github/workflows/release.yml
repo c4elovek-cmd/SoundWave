@@ -61,3 +61,21 @@ jobs:
           }
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Лента обновлений для канала
+        shell: pwsh
+        run: |
+          $version = (Get-Content "package.json" -Raw | ConvertFrom-Json).version
+          $channel = if ($version -match "-alpha\.") { "alpha" } elseif ($version -match "-beta\.") { "beta" } else { "stable" }
+          $feed = "release/latest.yml"
+
+          # Отдельный релиз на канал: ссылка на ленту постоянная,
+          # а внутри лежит последняя сборка этого канала.
+          gh release view $channel *> $null
+          if ($LASTEXITCODE -ne 0) {
+            gh release create $channel --title "SoundWave — канал $channel" --notes "Лента обновлений канала $channel." --prerelease 2>&1 | Out-Null
+          }
+          gh release upload $channel $feed --clobber
+          Write-Output "Лента канала $channel обновлена"
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
