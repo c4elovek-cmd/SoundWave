@@ -856,8 +856,10 @@ fn create_tray(app: &AppHandle) -> tauri::Result<()> {
 
     let menu = Menu::with_items(app, &[&show, &play, &next, &prev, &quit])?;
 
+    // В подсказке видно, какая это версия — Rust или Electron.
+    let version = app.package_info().version.to_string();
     let mut builder = TrayIconBuilder::with_id("soundwave")
-        .tooltip("SoundWave")
+        .tooltip(format!("SoundWave {version} · RUST"))
         .menu(&menu)
         .show_menu_on_left_click(false)
         .on_menu_event(|app, event| {

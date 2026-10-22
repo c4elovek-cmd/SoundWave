@@ -1400,7 +1400,8 @@ function createTray() {
     },
   ]);
 
-  tray.setToolTip("SoundWave");
+  // В подсказке видно, какая это версия — Rust или Electron.
+  tray.setToolTip(`SoundWave ${app.getVersion()} · ELECTRON`);
   tray.setContextMenu(contextMenu);
 
   tray.on("click", () => {
