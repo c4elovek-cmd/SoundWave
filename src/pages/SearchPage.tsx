@@ -11,8 +11,9 @@ import { errorText } from "../lib/errorText";
 type Tab = "tracks" | "artists" | "playlists";
 
 export default function SearchPage() {
-  const { isLoggedIn } = useAppStore();
-  const [query, setQuery] = useState("");
+  // Запрос может прийти с другой страницы — например, с карточек жанров.
+  const { isLoggedIn, searchQuery } = useAppStore();
+  const [query, setQuery] = useState(searchQuery);
   const [tab, setTab] = useState<Tab>("tracks");
   const [tracks, setTracks] = useState<SCTrack[]>([]);
   const [artists, setArtists] = useState<SCUser[]>([]);

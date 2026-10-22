@@ -2,6 +2,7 @@ import { useEffect, useState } from "react";
 import { MusicNotes, ArrowClockwise } from "@phosphor-icons/react";
 import { useAppStore } from "../stores/appStore";
 import { usePlayerStore } from "../stores/playerStore";
+import { logAction } from "../lib/actionLog";
 import { scApi } from "../lib/soundcloud-api";
 import { SCTrack, SCUser, SCPlaylist } from "../types/soundcloud";
 import TrackRow from "../components/Track/TrackRow";
@@ -9,8 +10,27 @@ import Card from "../components/Track/Card";
 import "./Pages.css";
 import { errorText } from "../lib/errorText";
 
+/** Жанры и настроения для главной — как карточки на SoundCloud. */
+const MOODS = [
+  { title: "Хип-хоп", subtitle: "Ритм и бит", query: "hip hop", from: "#ff5500", to: "#c2410c" },
+  { title: "Электроника", subtitle: "Бит и синтез", query: "electronic", from: "#7c3aed", to: "#4c1d95" },
+  { title: "Рок", subtitle: "Гитары и драйв", query: "rock", from: "#dc2626", to: "#7f1d1d" },
+  { title: "Поп", subtitle: "Хиты сегодня", query: "pop", from: "#ec4899", to: "#9d174d" },
+  { title: "Джаз", subtitle: "Живые инструменты", query: "jazz", from: "#0ea5e9", to: "#075985" },
+  { title: "Чилл", subtitle: "Спокойный фон", query: "chill", from: "#14b8a6", to: "#0f766e" },
+  { title: "Классика", subtitle: "Оркестр и скрипки", query: "classical", from: "#6366f1", to: "#3730a3" },
+  { title: "Эмбиент", subtitle: "Для работы и сна", query: "ambient", from: "#64748b", to: "#1e293b" },
+];
+
 export default function HomePage() {
-  const { isLoggedIn, currentUser, likedTracks, setLikedTracks } = useAppStore();
+  const {
+    isLoggedIn,
+    currentUser,
+    likedTracks,
+    setLikedTracks,
+    setSearchQuery,
+    setView,
+  } = useAppStore();
   const { play } = usePlayerStore();
   const [recommended, setRecommended] = useState<SCTrack[]>([]);
   const [artists, setArtists] = useState<SCUser[]>([]);
@@ -134,6 +154,33 @@ export default function HomePage() {
             ))}
           </div>
         )}
+
+        {/* Жанры и настроения — как на SoundCloud, но в нашем оформлении */}
+        <div className="section">
+          <div className="section-header">
+            <span className="section-title">Жанры и настроения</span>
+          </div>
+          <div className="mood-grid">
+            {MOODS.map((mood) => (
+              <button
+                key={mood.title}
+                className="mood-card"
+                style={{
+                  background: `linear-gradient(135deg, ${mood.from}, ${mood.to})`,
+                }}
+                onClick={() => {
+                  logAction("mood", { mood: mood.query });
+                  setSearchQuery(mood.query);
+                  setView("search");
+                }}
+                title={`Найти: ${mood.query}`}
+              >
+                <span className="mood-title">{mood.title}</span>
+                <span className="mood-subtitle">{mood.subtitle}</span>
+              </button>
+            ))}
+          </div>
+        </div>
       </div>
     );
   }
@@ -257,6 +304,33 @@ export default function HomePage() {
           </div>
         </div>
       )}
+
+      {/* Жанры и настроения — как на SoundCloud, но в нашем оформлении */}
+      <div className="section">
+        <div className="section-header">
+          <span className="section-title">Жанры и настроения</span>
+        </div>
+        <div className="mood-grid">
+          {MOODS.map((mood) => (
+            <button
+              key={mood.title}
+              className="mood-card"
+              style={{
+                background: `linear-gradient(135deg, ${mood.from}, ${mood.to})`,
+              }}
+              onClick={() => {
+                logAction("mood", { mood: mood.query });
+                setSearchQuery(mood.query);
+                setView("search");
+              }}
+              title={`Найти: ${mood.query}`}
+            >
+              <span className="mood-title">{mood.title}</span>
+              <span className="mood-subtitle">{mood.subtitle}</span>
+            </button>
+          ))}
+        </div>
+      </div>
     </div>
   );
 }
