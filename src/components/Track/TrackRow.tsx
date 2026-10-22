@@ -10,6 +10,7 @@ import {
 } from "../../stores/downloadStore";
 import { formatDuration, formatNumber } from "../../lib/soundcloud-api";
 import { logAction } from "../../lib/actionLog";
+import { trackUrl, userUrl } from "../../lib/soundcloudLinks";
 import "./TrackRow.css";
 
 interface Props {
@@ -47,6 +48,14 @@ export default function TrackRow({
     ensureDownloadSubscription();
   }, []);
 
+  /** Открывает страницу трека или автора в браузере. */
+  const openLink = (e: React.MouseEvent, url: string | null) => {
+    e.stopPropagation();
+    if (!url) return;
+    logAction("open_external", { url });
+    void window.electronAPI?.openExternal?.(url);
+  };
+
   const handlePlay = (e: React.MouseEvent) => {
     e.stopPropagation();
     if (isCurrent) {
@@ -80,14 +89,36 @@ export default function TrackRow({
 
       <div className="track-main">
         <div className="track-art">
-          {artwork ? <img src={artwork} alt="" /> : <MusicNotes size={18} />}
+          {artwork ? (
+            <img
+              src={artwork}
+              alt=""
+              onClick={(e) => openLink(e, trackUrl(track))}
+              title="Открыть страницу трека"
+            />
+          ) : (
+            <MusicNotes
+              size={18}
+              onClick={(e) => openLink(e, trackUrl(track))}
+            />
+          )}
         </div>
         <div className="track-text">
-          <span className="track-title" title={track.title}>
+          <span
+            className="track-title track-title-link"
+            title={`${track.title} — открыть на SoundCloud`}
+            onClick={(e) => openLink(e, trackUrl(track))}
+          >
             {track.title}
           </span>
           {showArtist && (
-            <span className="track-artist">{track.user?.username ?? "Неизвестный автор"}</span>
+            <span
+              className="track-artist track-artist-link"
+              title="Открыть страницу автора"
+              onClick={(e) => openLink(e, userUrl(track.user ?? {}))}
+            >
+              {track.user?.username ?? "Неизвестный автор"}
+            </span>
           )}
         </div>
       </div>

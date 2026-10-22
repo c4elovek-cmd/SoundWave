@@ -29,6 +29,7 @@ import {
 } from "../../stores/downloadStore";
 import { formatDuration } from "../../lib/soundcloud-api";
 import { logAction } from "../../lib/actionLog";
+import { trackUrl, userUrl } from "../../lib/soundcloudLinks";
 import "./Player.css";
 
 export default function Player() {
@@ -57,6 +58,13 @@ export default function Player() {
   const download = useDownloadStore((s) =>
     currentTrack ? s.downloads[currentTrack.id] : undefined
   );
+
+  /** Открывает страницу SoundCloud в браузере. */
+  const openSoundCloud = (url: string | null) => {
+    if (!url) return;
+    logAction("open_external", { url });
+    void window.electronAPI?.openExternal?.(url);
+  };
 
   // События скачивания приходят из бэкенда — одно на всё приложение.
   useEffect(() => {
@@ -197,13 +205,30 @@ export default function Player() {
       {/* Левая часть — трек */}
       <div className="player-track">
         <div className="player-artwork">
-          {artwork ? <img src={artwork} alt="" /> : <MusicNotes size={24} />}
+          {artwork ? (
+            <img
+              src={artwork}
+              alt=""
+              onClick={() => openSoundCloud(trackUrl(currentTrack))}
+              title="Открыть страницу трека"
+            />
+          ) : (
+            <MusicNotes size={24} onClick={() => openSoundCloud(trackUrl(currentTrack))} />
+          )}
         </div>
         <div className="player-track-info">
-          <span className="player-track-title" title={currentTrack.title}>
+          <span
+            className="player-track-title player-link"
+            title={`${currentTrack.title} — открыть на SoundCloud`}
+            onClick={() => openSoundCloud(trackUrl(currentTrack))}
+          >
             {currentTrack.title}
           </span>
-          <span className="player-track-artist" title={currentTrack.user?.username ?? ""}>
+          <span
+            className="player-track-artist player-link"
+            title="Открыть страницу автора"
+            onClick={() => openSoundCloud(userUrl(currentTrack.user ?? {}))}
+          >
             {currentTrack.user?.username ?? ""}
           </span>
           {error && (

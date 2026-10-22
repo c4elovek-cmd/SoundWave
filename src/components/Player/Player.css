@@ -286,3 +286,17 @@
 .player-download:disabled {
   cursor: default;
 }
+/* Ссылки на SoundCloud в плеере */
+.player-link {
+  cursor: pointer;
+  transition: color var(--transition-fast);
+}
+
+.player-link:hover {
+  color: var(--accent);
+  text-decoration: underline;
+}
+
+.player-artwork img {
+  cursor: pointer;
+}

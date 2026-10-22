@@ -11,6 +11,8 @@ import {
 import Sidebar from "./components/Sidebar/Sidebar";
 import TitleBar from "./components/TitleBar/TitleBar";
 import ToastHost from "./components/Toast/Toast";
+import { userUrl } from "./lib/soundcloudLinks";
+import { logAction } from "./lib/actionLog";
 import Player from "./components/Player/Player";
 import LyricsPanel from "./components/Lyrics/LyricsPanel";
 import KaraokeFullscreen from "./components/Lyrics/KaraokeFullscreen";
@@ -265,7 +267,16 @@ export default function App() {
               </button>
 
               {isLoggedIn ? (
-                <div className="user-chip">
+                <button
+                  className="user-chip"
+                  title="Открыть страницу профиля на SoundCloud"
+                  onClick={() => {
+                    const url = userUrl(currentUser ?? {});
+                    if (!url) return;
+                    logAction("open_external", { url });
+                    void window.electronAPI?.openExternal?.(url);
+                  }}
+                >
                   <div className="user-avatar">
                     {currentUser?.avatar_url ? (
                       <img src={currentUser.avatar_url} alt="" />
@@ -274,7 +285,7 @@ export default function App() {
                     )}
                   </div>
                   <span className="user-name">{currentUser?.username ?? "Аккаунт"}</span>
-                </div>
+                </button>
               ) : (
                 <div style={{ position: "relative" }}>
                   <button
