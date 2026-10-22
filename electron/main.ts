@@ -1681,10 +1681,14 @@ function setupIPC() {  // Получить сохранённые настрой
   // Открыть файл или папку средствами системы
   ipcMain.handle("open-path", async (_event, target: string) => {
     try {
-      if (target.includes(":") && !target.startsWith("http")) {
-        await shell.openPath(target);
+      const resolved =
+        target === "downloads" || !target
+          ? app.getPath("downloads")
+          : target;
+      if (resolved.includes(":") && !resolved.startsWith("http")) {
+        await shell.openPath(resolved);
       } else {
-        shell.showItemInFolder(target);
+        shell.showItemInFolder(resolved);
       }
       return { ok: true };
     } catch (e) {

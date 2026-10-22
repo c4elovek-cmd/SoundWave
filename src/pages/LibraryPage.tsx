@@ -7,6 +7,7 @@ import { SCTrack } from "../types/soundcloud";
 import TrackRow from "../components/Track/TrackRow";
 import "./Pages.css";
 import { errorText } from "../lib/errorText";
+import { useNetworkStore } from "../stores/networkStore";
 
 type Mode = "likes" | "uploads";
 
@@ -58,6 +59,11 @@ export default function LibraryPage({ mode }: Props) {
 
   useEffect(() => {
     load();
+
+    // Автоматическое обновление списка при восстановлении сети
+    return useNetworkStore.getState().onReconnect(() => {
+      void load();
+    });
   }, [mode, isLoggedIn]);
 
   const loadMore = async () => {

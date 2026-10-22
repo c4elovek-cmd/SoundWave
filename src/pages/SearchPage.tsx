@@ -7,6 +7,7 @@ import TrackRow from "../components/Track/TrackRow";
 import Card from "../components/Track/Card";
 import "./Pages.css";
 import { errorText } from "../lib/errorText";
+import { useNetworkStore } from "../stores/networkStore";
 
 type Tab = "tracks" | "artists" | "playlists";
 
@@ -53,6 +54,15 @@ export default function SearchPage() {
     return () => {
       if (debounceRef.current) clearTimeout(debounceRef.current);
     };
+  }, [query, tab]);
+
+  // Автоматический повтор поиска при восстановлении сети
+  useEffect(() => {
+    return useNetworkStore.getState().onReconnect(() => {
+      if (query.trim().length >= 2) {
+        void runSearch(query.trim());
+      }
+    });
   }, [query, tab]);
 
   const runSearch = async (q: string) => {

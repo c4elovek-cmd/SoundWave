@@ -62,6 +62,14 @@ interface PlayerState {
   playToken: number;
   /** Пользователь хочет слышать звук (пауза сбрасывает флаг). */
   shouldPlay: boolean;
+  /** Трек ожидает восстановления сети для продолжения воспроизведения */
+  waitingForNetwork: boolean;
+  /** Сохранённая позиция воспроизведения при обрыве связи (в секундах) */
+  savedTimeOnDisconnect: number;
+  /** Обработка перехода в оффлайн */
+  handleNetworkOffline: () => void;
+  /** Обработка восстановления соединения */
+  handleNetworkOnline: () => void;
 }
 
 export const usePlayerStore = create<PlayerState>((set, get) => ({
@@ -82,6 +90,8 @@ export const usePlayerStore = create<PlayerState>((set, get) => ({
   refilling: false,
   playToken: 0,
   shouldPlay: false,
+  waitingForNetwork: false,
+  savedTimeOnDisconnect: 0,
 
   play: async (track, queue = [], index = 0, options) => {
     // Треки с DRM браузер не играет: у SoundCloud для них только
@@ -143,6 +153,18 @@ export const usePlayerStore = create<PlayerState>((set, get) => ({
       error: null,
     });
 
+    // Защита от потери интернета: если сети нет прямо сейчас,
+    // запоминаем трек и ставим в режим ожидания сети
+    if (typeof navigator !== "undefined" && !navigator.onLine) {
+      set({
+        isPlaying: false,
+        shouldPlay: true,
+        waitingForNetwork: true,
+        error: "Ожидание сети: трек начнёт играть автоматически при подключении",
+      });
+      return;
+    }
+
     // Ссылка на аудио живёт в подписанном CDN-URL, который выдаёт SoundCloud
     // по манифесту потока. Поле track.stream_url ведёт на api-v2 и без
     // client_id отдаёт 404, поэтому его использовать нельзя.
@@ -154,7 +176,16 @@ export const usePlayerStore = create<PlayerState>((set, get) => ({
       protocol = stream.protocol;
     } catch (e) {
       const message = errorText(e, "Не удалось получить ссылку на трек");
-      set({ error: message, isPlaying: false });
+      const isNet =
+        message.includes("интернет") ||
+        (typeof navigator !== "undefined" && !navigator.onLine);
+      set({
+        error: isNet
+          ? "Ожидание сети: трек начнёт играть автоматически при подключении"
+          : message,
+        isPlaying: false,
+        waitingForNetwork: isNet,
+      });
       console.error("Ошибка подготовки трека:", e);
       return;
     }
@@ -204,6 +235,15 @@ export const usePlayerStore = create<PlayerState>((set, get) => ({
         }
 
         if (data.type === Hls.ErrorTypes.NETWORK_ERROR) {
+          if (typeof navigator !== "undefined" && !navigator.onLine) {
+            console.warn("HLS сетевой сбой: нет интернета, ожидаем восстановление...");
+            set({
+              waitingForNetwork: true,
+              error: "Ожидание подключения к интернету...",
+              isPlaying: false,
+            });
+            return;
+          }
           hls.startLoad();
         } else if (data.type === Hls.ErrorTypes.MEDIA_ERROR) {
           hls.recoverMediaError();
@@ -226,11 +266,36 @@ export const usePlayerStore = create<PlayerState>((set, get) => ({
 
     audio.addEventListener("timeupdate", () => {
       const d = audio.duration || 0;
-      if (d > 0) set({ progress: audio.currentTime / d });
+      if (d > 0) {
+        set({
+          progress: audio.currentTime / d,
+          savedTimeOnDisconnect: audio.currentTime,
+        });
+      }
+    });
+
+    audio.addEventListener("waiting", () => {
+      if (typeof navigator !== "undefined" && !navigator.onLine) {
+        set({
+          waitingForNetwork: true,
+          error: "Ожидание подключения к интернету...",
+        });
+      }
+    });
+
+    audio.addEventListener("stalled", () => {
+      if (typeof navigator !== "undefined" && !navigator.onLine) {
+        set({
+          waitingForNetwork: true,
+          error: "Ожидание подключения к интернету...",
+        });
+      }
     });
 
     audio.addEventListener("play", () => {
-      if (get().playToken === token) set({ isPlaying: true, error: null });
+      if (get().playToken === token) {
+        set({ isPlaying: true, error: null, waitingForNetwork: false });
+      }
     });
     audio.addEventListener("pause", () => {
       if (get().playToken === token) set({ isPlaying: false });
@@ -248,7 +313,15 @@ export const usePlayerStore = create<PlayerState>((set, get) => ({
 
     audio.addEventListener("error", () => {
       console.error("Ошибка воспроизведения");
-      set({ error: "Не удалось загрузить аудио", isPlaying: false });
+      if (typeof navigator !== "undefined" && !navigator.onLine) {
+        set({
+          waitingForNetwork: true,
+          isPlaying: false,
+          error: "Воспроизведение приостановлено: ожидание сети...",
+        });
+      } else {
+        set({ error: "Не удалось загрузить аудио", isPlaying: false });
+      }
     });
 
     set({ audio });
@@ -453,4 +526,61 @@ export const usePlayerStore = create<PlayerState>((set, get) => ({
   setProgress: (p: number) => set({ progress: p }),
 
   setError: (error: string | null) => set({ error }),
+
+  handleNetworkOffline: () => {
+    const { isPlaying, audio } = get();
+    if (isPlaying) {
+      set({
+        waitingForNetwork: true,
+        savedTimeOnDisconnect: audio?.currentTime || get().savedTimeOnDisconnect,
+      });
+    }
+  },
+
+  handleNetworkOnline: () => {
+    const {
+      waitingForNetwork,
+      currentTrack,
+      queue,
+      queueIndex,
+      audio,
+      hls,
+      shouldPlay,
+      savedTimeOnDisconnect,
+    } = get();
+
+    const hasNetworkError =
+      get().error?.toLowerCase().includes("сет") ||
+      get().error?.toLowerCase().includes("интернет");
+
+    if (!waitingForNetwork && !hasNetworkError) {
+      return;
+    }
+
+    logAction("network_resume_play", { id: currentTrack?.id });
+    set({ waitingForNetwork: false, error: null });
+
+    if (shouldPlay && currentTrack) {
+      if (hls && audio) {
+        hls.startLoad();
+        void audio.play().catch(() => {
+          get().play(currentTrack, queue, queueIndex);
+        });
+        set({ isPlaying: true });
+      } else if (audio && audio.src && !audio.error) {
+        void audio.play().catch(() => {
+          get().play(currentTrack, queue, queueIndex);
+        });
+        set({ isPlaying: true });
+      } else {
+        get().play(currentTrack, queue, queueIndex);
+        if (savedTimeOnDisconnect > 0) {
+          setTimeout(() => {
+            const d = (get().duration || 1) / 1000;
+            if (d > 0) get().seek(savedTimeOnDisconnect / d);
+          }, 600);
+        }
+      }
+    }
+  },
 }));

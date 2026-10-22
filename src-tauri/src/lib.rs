@@ -1220,13 +1220,23 @@ async fn install_update(app: AppHandle) -> Value {
 }
 
 /// Открыть файл или папку средствами системы.
+/// Если передан "downloads" — открывает системную папку «Загрузки».
 #[tauri::command]
-fn open_path(path: String) -> Result<bool, String> {
+fn open_path(app: AppHandle, path: String) -> Result<bool, String> {
+    let target = if path == "downloads" || path.is_empty() {
+        app.path()
+            .download_dir()
+            .map(|p| p.to_string_lossy().to_string())
+            .unwrap_or_else(|_| "shell:Downloads".to_string())
+    } else {
+        path
+    };
+
     #[cfg(windows)]
     {
-        // start открывает файл в программе по умолчанию.
+        // start открывает файл или папку в программе по умолчанию.
         std::process::Command::new("cmd")
-            .args(["/C", "start", "", &path])
+            .args(["/C", "start", "", &target])
             .spawn()
             .map_err(|e| format!("Не удалось открыть: {e}"))?;
         Ok(true)
@@ -1235,7 +1245,7 @@ fn open_path(path: String) -> Result<bool, String> {
     #[cfg(not(windows))]
     {
         std::process::Command::new("xdg-open")
-            .arg(&path)
+            .arg(&target)
             .spawn()
             .map_err(|e| format!("Не удалось открыть: {e}"))?;
         Ok(true)

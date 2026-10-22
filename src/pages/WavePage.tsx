@@ -1,4 +1,4 @@
-import { useMemo } from "react";
+import { useEffect, useMemo } from "react";
 import {
   ArrowsClockwise,
   MusicNotes,
@@ -13,6 +13,7 @@ import { usePlayerStore } from "../stores/playerStore";
 import { useWaveStore } from "../stores/waveStore";
 import { WAVE_MODES } from "../lib/wave";
 import { formatDuration } from "../lib/soundcloud-api";
+import { useNetworkStore } from "../stores/networkStore";
 import "./Pages.css";
 import "./WavePage.css";
 
@@ -47,6 +48,15 @@ export default function WavePage() {
     () => (active ? queue.slice(queueIndex + 1) : []),
     [active, queue, queueIndex]
   );
+
+  // Автоматический перезапуск волны при восстановлении сети, если была ошибка
+  useEffect(() => {
+    return useNetworkStore.getState().onReconnect(() => {
+      if (active && error) {
+        void restart();
+      }
+    });
+  }, [active, error]);
 
   if (!isLoggedIn) {
     return (

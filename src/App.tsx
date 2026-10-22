@@ -11,6 +11,7 @@ import {
 import Sidebar from "./components/Sidebar/Sidebar";
 import TitleBar from "./components/TitleBar/TitleBar";
 import ToastHost from "./components/Toast/Toast";
+import OfflineBanner from "./components/OfflineBanner/OfflineBanner";
 import TrackPage from "./pages/TrackPage";
 import ArtistPage from "./pages/ArtistPage";
 import { logAction } from "./lib/actionLog";
@@ -33,6 +34,7 @@ import { pushDiscordPresence } from "./lib/discordPresence";
 import { runtimeName } from "./lib/runtime";
 import { setActionLogEnabled } from "./lib/actionLog";
 import { useSettingsStore } from "./stores/settingsStore";
+import { initNetworkMonitoring, useNetworkStore } from "./stores/networkStore";
 import "./components/Layout/Layout.css";
 
 export default function App() {
@@ -77,6 +79,25 @@ export default function App() {
   useEffect(() => {
     if (!window.electronAPI || window.location.hash.startsWith("#/auth")) return;
     return startAgentBridge();
+  }, []);
+
+  // Защита от потери интернета: мониторинг статуса сети и автовозобновление
+  useEffect(() => {
+    const cleanup = initNetworkMonitoring();
+    const unsub = useNetworkStore.subscribe((state, prev) => {
+      if (state.isOnline !== prev.isOnline) {
+        if (!state.isOnline) {
+          usePlayerStore.getState().handleNetworkOffline();
+        } else {
+          usePlayerStore.getState().handleNetworkOnline();
+        }
+      }
+    });
+
+    return () => {
+      cleanup();
+      unsub();
+    };
   }, []);
 
   // Настройки внешнего вида: анимации, плотность и стиль оформления.
@@ -341,6 +362,8 @@ export default function App() {
               )}
             </div>
           </div>
+
+          <OfflineBanner />
 
           <div className="content-scroll">{renderView()}</div>
         </div>

@@ -9,6 +9,7 @@ import TrackRow from "../components/Track/TrackRow";
 import Card from "../components/Track/Card";
 import "./Pages.css";
 import { errorText } from "../lib/errorText";
+import { useNetworkStore } from "../stores/networkStore";
 
 /** Жанры и настроения для главной — как карточки на SoundCloud. */
 const MOODS = [
@@ -98,6 +99,11 @@ export default function HomePage() {
   useEffect(() => {
     if (isLoggedIn) load();
     else setLoading(false);
+
+    // Автоматическое обновление данных при восстановлении сети
+    return useNetworkStore.getState().onReconnect(() => {
+      if (isLoggedIn) void load();
+    });
   }, [isLoggedIn]);
 
   const greeting = (() => {
