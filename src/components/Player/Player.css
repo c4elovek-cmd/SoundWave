@@ -271,3 +271,18 @@
   color: var(--text-disabled);
   font-size: 13px;
 }
+
+/* Дизлайк и скачивание на плеере */
+.player-dislike:hover {
+  color: var(--danger, #e5484d);
+}
+
+.player-download-percent {
+  font-size: 9.5px;
+  font-weight: 700;
+  color: var(--accent);
+}
+
+.player-download:disabled {
+  cursor: default;
+}

@@ -15,10 +15,20 @@ import {
   TextAa,
   Microphone,
   Heart,
+  ThumbsDown,
+  DownloadSimple,
+  Check,
 } from "@phosphor-icons/react";
 import { usePlayerStore } from "../../stores/playerStore";
 import { useAppStore } from "../../stores/appStore";
+import { useWaveStore } from "../../stores/waveStore";
+import {
+  downloadTrack,
+  ensureDownloadSubscription,
+  useDownloadStore,
+} from "../../stores/downloadStore";
 import { formatDuration } from "../../lib/soundcloud-api";
+import { logAction } from "../../lib/actionLog";
 import "./Player.css";
 
 export default function Player() {
@@ -42,6 +52,16 @@ export default function Player() {
     toggleShuffle,
     setProgress,
   } = usePlayerStore();
+
+  const dislike = useWaveStore((s) => s.dislike);
+  const download = useDownloadStore((s) =>
+    currentTrack ? s.downloads[currentTrack.id] : undefined
+  );
+
+  // События скачивания приходят из бэкенда — одно на всё приложение.
+  useEffect(() => {
+    ensureDownloadSubscription();
+  }, []);
 
   const {
     toggleQueue,
@@ -192,6 +212,51 @@ export default function Player() {
             </span>
           )}
         </div>
+        <button
+          className={`icon-btn player-dislike ${
+            download ? "" : ""
+          }`}
+          onClick={() => {
+            if (!currentTrack) return;
+            logAction("track.dislike", { id: currentTrack.id });
+            dislike(currentTrack);
+          }}
+          title="Больше не предлагать"
+          aria-label="Дизлайк"
+        >
+          <ThumbsDown size={17} />
+        </button>
+
+        <button
+          className={`icon-btn player-download ${download?.state ?? ""}`}
+          onClick={() => {
+            if (!currentTrack) return;
+            logAction("track.download", {
+              id: currentTrack.id,
+              title: currentTrack.title,
+            });
+            void downloadTrack(
+              currentTrack.id,
+              currentTrack.title,
+              currentTrack.user?.username ?? ""
+            );
+          }}
+          title="Скачать трек"
+          aria-label="Скачать трек"
+          disabled={
+            download?.state === "started" || download?.state === "progress"
+          }
+        >
+          {download?.state === "done" ? (
+            <Check size={17} weight="bold" style={{ color: "var(--success)" }} />
+          ) : download?.state === "started" ||
+            download?.state === "progress" ? (
+            <span className="player-download-percent">{download.percent}%</span>
+          ) : (
+            <DownloadSimple size={17} />
+          )}
+        </button>
+
         <button
           className={`icon-btn player-like ${isLiked ? "active" : ""} ${
             likeError ? "failed" : ""

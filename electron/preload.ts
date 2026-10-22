@@ -166,6 +166,37 @@ if (isExternalPage) {
     setCloseToTray: (value: boolean) =>
       ipcRenderer.invoke("set-close-to-tray", value),
 
+    // Открыть файл или папку
+    openPath: (target: string) => ipcRenderer.invoke("open-path", target),
+
+    // Скачивание трека в папку «Загрузки»
+    downloadTrack: (trackId: number, title: string, artist: string) =>
+      ipcRenderer.invoke("download-track", trackId, title, artist),
+    onDownloadProgress: (
+      callback: (info: {
+        trackId: number;
+        percent: number;
+        state: string;
+        path?: string;
+        error?: string;
+      }) => void
+    ) => {
+      const listener = (
+        _event: unknown,
+        info: {
+          trackId: number;
+          percent: number;
+          state: string;
+          path?: string;
+          error?: string;
+        }
+      ) => callback(info);
+      ipcRenderer.on("download-progress", listener);
+      return () => {
+        ipcRenderer.removeListener("download-progress", listener);
+      };
+    },
+
     // Автообновление
     checkForUpdates: () => ipcRenderer.invoke("check-for-updates"),
     installUpdate: () => ipcRenderer.invoke("install-update"),

@@ -39,6 +39,17 @@ pub struct StreamInfo {
     pub duration: u64,
 }
 
+/// Источник аудио для скачивания.
+///
+/// Часть файлов — обычный mp3, а у потоков HLS это отдельные сегменты:
+/// их нужно скачать по порядку и соединить в один файл.
+#[derive(Debug, Clone)]
+pub struct DownloadSource {
+    /// Файлы по порядку: для mp3 он один, для HLS — init и сегменты.
+    pub parts: Vec<String>,
+    /// Расширение итогового файла.
+    pub extension: String,
+}
 pub struct SoundCloud {
     client: reqwest::Client,
     client_id: Mutex<Option<String>>,
@@ -254,6 +265,95 @@ impl SoundCloud {
         Err(last_error)
     }
 
+
+    /// Источник аудио для скачивания.
+    ///
+    /// Для воспроизведения берётся любой играбельный поток (в том числе HLS
+    /// с кусками), а для скачивания нужен цельный файл: обычный mp3 либо
+    /// склеенные сегменты HLS.
+    pub async fn resolve_download(&self, track_id: u64) -> Result<DownloadSource, String> {
+        let track = self
+            .api(Method::GET, &format!("/tracks/{track_id}"), &[])
+            .await?;
+
+        let transcodings = track
+            .get("media")
+            .and_then(|m| m.get("transcodings"))
+            .and_then(|t| t.as_array())
+            .cloned()
+            .unwrap_or_default();
+
+        // 1. Обычный mp3 — идеальный вариант, один файл.
+        if let Some(progressive) = transcodings
+            .iter()
+            .find(|t| protocol_of(t) == "progressive")
+        {
+            let manifest = self.manifest_url(progressive).await?;
+            return Ok(DownloadSource {
+                parts: vec![manifest],
+                extension: "mp3".to_string(),
+            });
+        }
+
+        // 2. HLS с fMP4: init-сегмент плюс куски — из них получается .m4a.
+        let hls = transcodings
+            .iter()
+            .find(|t| protocol_of(t) == "hls" && mime_of(t).contains("mp4"))
+            .or_else(|| transcodings.iter().find(|t| protocol_of(t) == "hls"))
+            .ok_or("У трека нет потока, который можно скачать".to_string())?;
+
+        let playlist_url = self.manifest_url(hls).await?;
+        let playlist = self.get_text(&playlist_url).await?;
+        let parts = parse_hls_parts(&playlist, &playlist_url);
+
+        if parts.is_empty() {
+            return Err("Плейлист трека пустой — скачать нечего".to_string());
+        }
+
+        Ok(DownloadSource {
+            parts,
+            extension: "m4a".to_string(),
+        })
+    }
+
+    /// Ссылка на сам файл: у транскодировки она лежит в JSON-манифесте.
+    async fn manifest_url(&self, transcoding: &Value) -> Result<String, String> {
+        let path = transcoding
+            .get("url")
+            .and_then(|u| u.as_str())
+            .ok_or("SoundCloud не вернул ссылку на манифест")?;
+
+        let manifest = self
+            .api(Method::GET, path, &[])
+            .await
+            .map_err(|e| format!("Поток недоступен: {e}"))?;
+
+        manifest
+            .get("url")
+            .and_then(|u| u.as_str())
+            .map(|u| u.to_string())
+            .ok_or_else(|| "SoundCloud не вернул ссылку на аудио".to_string())
+    }
+
+    /// Простой GET без разбора JSON — для плейлистов HLS.
+    async fn get_text(&self, url: &str) -> Result<String, String> {
+        let response = self
+            .client
+            .get(url)
+            .header(USER_AGENT, BROWSER_UA)
+            .send()
+            .await
+            .map_err(|e| format!("Не удалось получить плейлист: {e}"))?;
+
+        if !response.status().is_success() {
+            return Err(format!("Плейлист недоступен: {}", response.status()));
+        }
+
+        response
+            .text()
+            .await
+            .map_err(|e| format!("Не удалось прочитать плейлист: {e}"))
+    }
     /// Подписанная ссылка на аудио.
     pub async fn resolve_stream(&self, track_id: u64) -> Result<StreamInfo, String> {
         let track = self
@@ -410,4 +510,54 @@ fn extract_client_id(js: &str) -> Option<String> {
         }
     }
     None
+}
+
+/// Файлы HLS-плейлиста: init-сегмент и куски, по порядку.
+///
+/// Возвращает абсолютные ссылки: в плейлисте они могут быть относительными.
+fn parse_hls_parts(playlist: &str, base_url: &str) -> Vec<String> {
+    let mut parts: Vec<String> = Vec::new();
+
+    for line in playlist.lines() {
+        let line = line.trim();
+        if line.is_empty() {
+            continue;
+        }
+
+        // #EXT-X-MAP:URI="..." — init-сегмент fMP4.
+        if let Some(rest) = line.strip_prefix("#EXT-X-MAP:") {
+            if let Some(uri) = extract_quoted(rest) {
+                if let Some(url) = absolute_url(base_url, &uri) {
+                    parts.push(url);
+                }
+            }
+            continue;
+        }
+
+        // Обычные строки — это сегменты.
+        if !line.starts_with('#') {
+            if let Some(url) = absolute_url(base_url, line) {
+                parts.push(url);
+            }
+        }
+    }
+
+    parts
+}
+
+/// Значение в кавычках: URI="...".
+fn extract_quoted(text: &str) -> Option<String> {
+    let start = text.find('"')? + 1;
+    let end = text[start..].find('"')? + start;
+    Some(text[start..end].to_string())
+}
+
+/// Абсолютная ссылка: относительные дополняем адресом плейлиста.
+fn absolute_url(base_url: &str, link: &str) -> Option<String> {
+    if link.starts_with("http://") || link.starts_with("https://") {
+        return Some(link.to_string());
+    }
+
+    let base = reqwest::Url::parse(base_url).ok()?;
+    base.join(link).ok().map(|u| u.to_string())
 }

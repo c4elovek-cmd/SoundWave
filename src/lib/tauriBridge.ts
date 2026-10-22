@@ -311,6 +311,32 @@ export function createTauriBridge(): Window["electronAPI"] {
       subscribe<boolean>("app-fullscreen-changed", callback),
 
     windowMinimize: () => invoke<boolean>("window_minimize"),
+    // --- Скачивание ---
+    downloadTrack: (trackId: number, title: string, artist: string) =>
+      invoke<{ ok: boolean; path?: string; error?: string }>("download_track", {
+        trackId,
+        title,
+        artist,
+      }),
+    openPath: (target: string) =>
+      invoke<{ ok: boolean; error?: string }>("open_path", { path: target }),
+    onDownloadProgress: (
+      callback: (info: {
+        trackId: number;
+        percent: number;
+        state: string;
+        path?: string;
+        error?: string;
+      }) => void
+    ) =>
+      subscribe<{
+        trackId: number;
+        percent: number;
+        state: string;
+        path?: string;
+        error?: string;
+      }>("download-progress", callback),
+
     windowToggleMaximize: () => invoke<boolean>("window_toggle_maximize"),
     windowIsMaximized: () => invoke<boolean>("window_is_maximized"),
     windowClose: () => invoke<boolean>("window_close"),

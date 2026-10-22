@@ -201,7 +201,7 @@
 /* Заголовок списка треков */
 .track-list-header {
   display: grid;
-  grid-template-columns: 32px 1fr 120px 160px 60px 40px;
+  grid-template-columns: 32px 1fr 120px 160px 60px 40px 40px;
   gap: 14px;
   padding: 0 12px 8px;
   border-bottom: 1px solid var(--border-subtle);
