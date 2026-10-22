@@ -34,6 +34,8 @@ export default function TrackRow({
   const download = useDownloadStore((s) => s.downloads[track.id]);
   const likedTracks = useAppStore((s) => s.likedTracks);
   const toggleLike = useAppStore((s) => s.toggleLike);
+  const openTrack = useAppStore((s) => s.openTrack);
+  const openArtist = useAppStore((s) => s.openArtist);
 
   const liked = isLiked ?? likedTracks.some((item) => item.id === track.id);
   const isCurrent = currentTrack?.id === track.id;
@@ -48,12 +50,24 @@ export default function TrackRow({
     ensureDownloadSubscription();
   }, []);
 
-  /** Открывает страницу трека или автора в браузере. */
+  /** Открывает страницу трека или автора внутри приложения. */
   const openLink = (e: React.MouseEvent, url: string | null) => {
     e.stopPropagation();
     if (!url) return;
     logAction("open_external", { url });
     void window.electronAPI?.openExternal?.(url);
+  };
+
+  /** Переход на страницу трека внутри приложения. */
+  const openTrackPage = (e: React.MouseEvent) => {
+    e.stopPropagation();
+    openTrack(track.id);
+  };
+
+  /** Переход на страницу автора внутри приложения. */
+  const openArtistPage = (e: React.MouseEvent) => {
+    e.stopPropagation();
+    if (track.user?.id) openArtist(track.user.id);
   };
 
   const handlePlay = (e: React.MouseEvent) => {
@@ -93,13 +107,13 @@ export default function TrackRow({
             <img
               src={artwork}
               alt=""
-              onClick={(e) => openLink(e, trackUrl(track))}
+              onClick={openTrackPage}
               title="Открыть страницу трека"
             />
           ) : (
             <MusicNotes
               size={18}
-              onClick={(e) => openLink(e, trackUrl(track))}
+              onClick={openTrackPage}
             />
           )}
         </div>
@@ -107,7 +121,7 @@ export default function TrackRow({
           <span
             className="track-title track-title-link"
             title={`${track.title} — открыть на SoundCloud`}
-            onClick={(e) => openLink(e, trackUrl(track))}
+            onClick={openTrackPage}
           >
             {track.title}
           </span>
@@ -115,7 +129,7 @@ export default function TrackRow({
             <span
               className="track-artist track-artist-link"
               title="Открыть страницу автора"
-              onClick={(e) => openLink(e, userUrl(track.user ?? {}))}
+              onClick={openArtistPage}
             >
               {track.user?.username ?? "Неизвестный автор"}
             </span>

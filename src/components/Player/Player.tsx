@@ -55,6 +55,8 @@ export default function Player() {
   } = usePlayerStore();
 
   const dislike = useWaveStore((s) => s.dislike);
+  const openTrack = useAppStore((s) => s.openTrack);
+  const openArtist = useAppStore((s) => s.openArtist);
   const download = useDownloadStore((s) =>
     currentTrack ? s.downloads[currentTrack.id] : undefined
   );
@@ -64,6 +66,16 @@ export default function Player() {
     if (!url) return;
     logAction("open_external", { url });
     void window.electronAPI?.openExternal?.(url);
+  };
+
+  /** Переход на страницу трека внутри приложения. */
+  const openTrackPage = () => {
+    if (currentTrack) openTrack(currentTrack.id);
+  };
+
+  /** Переход на страницу автора внутри приложения. */
+  const openArtistPage = () => {
+    if (currentTrack?.user?.id) openArtist(currentTrack.user.id);
   };
 
   // События скачивания приходят из бэкенда — одно на всё приложение.
@@ -209,25 +221,25 @@ export default function Player() {
             <img
               src={artwork}
               alt=""
-              onClick={() => openSoundCloud(trackUrl(currentTrack))}
+              onClick={openTrackPage}
               title="Открыть страницу трека"
             />
           ) : (
-            <MusicNotes size={24} onClick={() => openSoundCloud(trackUrl(currentTrack))} />
+            <MusicNotes size={24} onClick={openTrackPage} />
           )}
         </div>
         <div className="player-track-info">
           <span
             className="player-track-title player-link"
             title={`${currentTrack.title} — открыть на SoundCloud`}
-            onClick={() => openSoundCloud(trackUrl(currentTrack))}
+            onClick={openTrackPage}
           >
             {currentTrack.title}
           </span>
           <span
             className="player-track-artist player-link"
             title="Открыть страницу автора"
-            onClick={() => openSoundCloud(userUrl(currentTrack.user ?? {}))}
+            onClick={openArtistPage}
           >
             {currentTrack.user?.username ?? ""}
           </span>

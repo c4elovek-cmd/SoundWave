@@ -11,7 +11,7 @@ import {
 import { logAction } from "../lib/actionLog";
 
 export type Theme = string;
-export type View = "home" | "wave" | "search" | "library" | "likes" | "uploads" | "playlist" | "artist";
+export type View = "home" | "wave" | "search" | "library" | "likes" | "uploads" | "playlist" | "artist" | "track";
 
 interface AppState {
   // Тема
@@ -28,6 +28,13 @@ interface AppState {
   // Параметры навигации
   currentPlaylistId: number | null;
   currentArtistId: number | null;
+  // Открытый трек или автор — страницы внутри приложения
+  currentTrackId: number | null;
+  openTrack: (id: number) => void;
+  openArtist: (id: number) => void;
+  // История переходов — для кнопки «Назад»
+  history: { view: View; trackId: number | null; artistId: number | null }[];
+  goBack: () => void;
   searchQuery: string;
   setSearchQuery: (q: string) => void;
 
@@ -122,6 +129,39 @@ export const useAppStore = create<AppState>((set, get) => ({
 
   currentPlaylistId: null,
   currentArtistId: null,
+  currentTrackId: null,
+  history: [],
+  openTrack: (id) =>
+    set((s) => ({
+      view: "track",
+      currentTrackId: id,
+      currentArtistId: null,
+      history: [
+        ...s.history,
+        { view: s.view, trackId: s.currentTrackId, artistId: s.currentArtistId },
+      ],
+    })),
+  openArtist: (id) =>
+    set((s) => ({
+      view: "artist",
+      currentArtistId: id,
+      currentTrackId: null,
+      history: [
+        ...s.history,
+        { view: s.view, trackId: s.currentTrackId, artistId: s.currentArtistId },
+      ],
+    })),
+  goBack: () =>
+    set((s) => {
+      const last = s.history[s.history.length - 1];
+      if (!last) return s;
+      return {
+        view: last.view,
+        currentTrackId: last.trackId,
+        currentArtistId: last.artistId,
+        history: s.history.slice(0, -1),
+      };
+    }),
   searchQuery: "",
   setSearchQuery: (searchQuery) => set({ searchQuery }),
 

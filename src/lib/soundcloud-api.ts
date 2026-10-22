@@ -97,6 +97,11 @@ export const scApi = {
   },
 
   // Треки пользователя
+  // Автор по id
+  async getUser(userId: number): Promise<import("../types/soundcloud").SCUser> {
+    return apiRequest(`/users/${userId}`);
+  },
+
   async getUserTracks(userId: number, limit = 50): Promise<import("../types/soundcloud").SCPaginatedResponse<import("../types/soundcloud").SCTrack>> {
     return apiRequest(`/users/${userId}/tracks`, { limit });
   },

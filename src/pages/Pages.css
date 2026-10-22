@@ -565,3 +565,134 @@
 @keyframes spin {
   to { transform: rotate(360deg); }
 }
+
+/* ===== Страница трека и автора ===== */
+
+.detail-page {
+  padding: 24px 28px 40px;
+  overflow-y: auto;
+  height: 100%;
+}
+
+.detail-head {
+  display: flex;
+  gap: 22px;
+  align-items: flex-start;
+  padding-bottom: 22px;
+  border-bottom: 1px solid var(--border-subtle);
+  margin-bottom: 20px;
+}
+
+.detail-art {
+  width: 180px;
+  height: 180px;
+  flex: none;
+  border-radius: var(--radius-lg);
+  overflow: hidden;
+  background: var(--bg-elevated);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  color: var(--text-disabled);
+}
+
+.detail-art.round {
+  border-radius: 50%;
+}
+
+.detail-art img {
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+}
+
+.detail-info {
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+
+.detail-kind {
+  font-size: 11px;
+  font-weight: 700;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: var(--text-disabled);
+}
+
+.detail-title {
+  font-size: 26px;
+  font-weight: 700;
+  line-height: 1.2;
+  color: var(--text-primary);
+  word-break: break-word;
+}
+
+.detail-subtitle {
+  font-size: 13px;
+  color: var(--text-secondary);
+}
+
+.detail-user {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  align-self: flex-start;
+  padding: 4px 12px 4px 4px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-full);
+  background: var(--bg-elevated);
+  color: var(--text-primary);
+  font-size: 12.5px;
+  font-weight: 600;
+  cursor: pointer;
+  transition: border-color var(--transition-fast), background var(--transition-fast);
+}
+
+.detail-user:hover {
+  border-color: var(--accent);
+  background: var(--bg-hover);
+}
+
+.detail-user img {
+  width: 24px;
+  height: 24px;
+  border-radius: 50%;
+  object-fit: cover;
+}
+
+.detail-description {
+  font-size: 12.5px;
+  line-height: 1.5;
+  color: var(--text-secondary);
+  max-width: 640px;
+}
+
+.detail-stats {
+  display: flex;
+  gap: 16px;
+  font-size: 12px;
+  color: var(--text-disabled);
+}
+
+.detail-actions {
+  display: flex;
+  gap: 10px;
+  flex-wrap: wrap;
+  margin-top: 4px;
+}
+
+.detail-actions .btn-accent,
+.detail-actions .btn-ghost {
+  display: inline-flex;
+  align-items: center;
+  gap: 7px;
+}
+
+.detail-section {
+  font-size: 16px;
+  font-weight: 700;
+  color: var(--text-primary);
+  margin-bottom: 12px;
+}

@@ -5,6 +5,8 @@ export interface SCUser {
   username: string;
   full_name: string;
   avatar_url: string;
+  /** Страница автора на SoundCloud. */
+  permalink_url?: string;
   followers_count?: number;
   following_count?: number;
   playlist_count?: number;

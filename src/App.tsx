@@ -12,6 +12,8 @@ import Sidebar from "./components/Sidebar/Sidebar";
 import TitleBar from "./components/TitleBar/TitleBar";
 import ToastHost from "./components/Toast/Toast";
 import { userUrl } from "./lib/soundcloudLinks";
+import TrackPage from "./pages/TrackPage";
+import ArtistPage from "./pages/ArtistPage";
 import { logAction } from "./lib/actionLog";
 import Player from "./components/Player/Player";
 import LyricsPanel from "./components/Lyrics/LyricsPanel";
@@ -38,6 +40,12 @@ export default function App() {
   const {
     view,
     setView,
+    currentTrackId,
+    currentArtistId,
+    openTrack,
+    openArtist,
+    goBack,
+    history,
     isLoggedIn,
     setLoggedIn,
     currentUser,
@@ -237,6 +245,18 @@ export default function App() {
         return <LibraryPage mode="uploads" />;
       case "library":
         return <LibraryPage mode="likes" />;
+      case "track":
+        return currentTrackId ? (
+          <TrackPage trackId={currentTrackId} />
+        ) : (
+          <HomePage />
+        );
+      case "artist":
+        return currentArtistId ? (
+          <ArtistPage artistId={currentArtistId} />
+        ) : (
+          <HomePage />
+        );
       default:
         return <HomePage />;
     }
@@ -251,7 +271,12 @@ export default function App() {
         <div className="app-main">
           <div className="top-bar">
             <div className="nav-arrows">
-              <button className="nav-arrow" disabled title="Назад">
+              <button
+                className="nav-arrow"
+                disabled={!history.length}
+                onClick={goBack}
+                title="Назад"
+              >
                 <CaretLeft size={18} weight="bold" />
               </button>
               <button className="nav-arrow" disabled title="Вперёд">
