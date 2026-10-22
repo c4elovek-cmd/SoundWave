@@ -317,3 +317,23 @@
 .track-download.error .track-download-percent {
   color: var(--danger, #e5484d);
 }
+/* Ссылки на SoundCloud: название трека, автор и обложка */
+.track-title-link,
+.track-artist-link {
+  cursor: pointer;
+  transition: color var(--transition-fast);
+}
+
+.track-title-link:hover {
+  color: var(--accent);
+  text-decoration: underline;
+}
+
+.track-artist-link:hover {
+  color: var(--text-primary);
+  text-decoration: underline;
+}
+
+.track-art img {
+  cursor: pointer;
+}
