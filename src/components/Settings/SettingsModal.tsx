@@ -611,7 +611,7 @@ export default function SettingsModal() {
 
               <Row
                 label="Имя большой картинки"
-                hint="Ключ ассета в Discord — обычно soundwave"
+                hint="Запасной ассет, если у трека нет обложки (обычно soundwave). Обложка трека показывается автоматически"
               >
                 <input
                   className="settings-input"

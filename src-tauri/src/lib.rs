@@ -827,11 +827,23 @@ fn set_discord_presence(app: AppHandle, presence: Option<Value>) -> Result<bool,
             .get("smallText")
             .and_then(|v| v.as_str())
             .map(String::from),
-        large_image_key: Some(if large_image.is_empty() {
-            discord::DEFAULT_DISCORD_ASSET.to_string()
-        } else {
-            large_image
-        }),
+        // Для Discord Rich Presence можно передать внешний URL изображения.
+        // Берём обложку трека, а если её нет — сохранённый ассет приложения.
+        large_image_key: Some(
+            presence
+                .get("artworkUrl")
+                .and_then(|v| v.as_str())
+                .filter(|url| url.starts_with("https://"))
+                .map(String::from)
+                .filter(|url| !url.is_empty())
+                .unwrap_or_else(|| {
+                    if large_image.is_empty() {
+                        discord::DEFAULT_DISCORD_ASSET.to_string()
+                    } else {
+                        large_image
+                    }
+                }),
+        ),
         large_image_text: presence
             .get("largeText")
             .and_then(|v| v.as_str())

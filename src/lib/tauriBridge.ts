@@ -279,6 +279,8 @@ export function createTauriBridge(): Window["electronAPI"] {
     setDiscordPresence: (presence: {
       details?: string;
       state?: string;
+      /** Ссылка на обложку трека — Discord принимает внешний URL. */
+      artworkUrl?: string;
       largeText?: string;
       smallText?: string;
       startTimestamp?: number;

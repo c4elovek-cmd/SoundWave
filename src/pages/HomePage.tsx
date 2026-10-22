@@ -1,15 +1,13 @@
-import { useEffect, useState } from "react";
+import { useEffect } from "react";
 import { MusicNotes, ArrowClockwise } from "@phosphor-icons/react";
 import { useAppStore } from "../stores/appStore";
 import { usePlayerStore } from "../stores/playerStore";
 import { logAction } from "../lib/actionLog";
-import { scApi } from "../lib/soundcloud-api";
-import { SCTrack, SCUser, SCPlaylist } from "../types/soundcloud";
 import TrackRow from "../components/Track/TrackRow";
 import Card from "../components/Track/Card";
 import "./Pages.css";
-import { errorText } from "../lib/errorText";
 import { useNetworkStore } from "../stores/networkStore";
+import { useHomeStore } from "../stores/homeStore";
 
 /** Жанры и настроения для главной — как карточки на SoundCloud. */
 const MOODS = [
@@ -24,81 +22,38 @@ const MOODS = [
 ];
 
 export default function HomePage() {
-  const {
-    isLoggedIn,
-    currentUser,
-    likedTracks,
-    setLikedTracks,
-    setSearchQuery,
-    setView,
-  } = useAppStore();
+  const { isLoggedIn, currentUser, likedTracks, setSearchQuery, setView } =
+    useAppStore();
   const { play } = usePlayerStore();
-  const [recommended, setRecommended] = useState<SCTrack[]>([]);
-  const [artists, setArtists] = useState<SCUser[]>([]);
-  const [playlists, setPlaylists] = useState<SCPlaylist[]>([]);
-  const [trending, setTrending] = useState<SCTrack[]>([]);
-  const [trendingLoading, setTrendingLoading] = useState(true);
-  const [loading, setLoading] = useState(true);
-  const [error, setError] = useState<string | null>(null);
+
+  // Данные главной живут в сторе: при возврате на страницу они уже на месте,
+  // поэтому скелетоны не мелькают.
+  const {
+    recommended,
+    artists,
+    playlists,
+    trending,
+    loading,
+    trendingLoading,
+    error,
+    load,
+    loadTrending,
+    reset,
+  } = useHomeStore();
 
   // Для гостей показываем популярное — charts SoundCloud доступен без входа
   useEffect(() => {
     if (isLoggedIn) return;
-    let cancelled = false;
-
-    scApi
-      .getTrending(20)
-      .then((res) => {
-        if (!cancelled) setTrending(res.collection ?? []);
-      })
-      .catch(() => {})
-      .finally(() => {
-        if (!cancelled) setTrendingLoading(false);
-      });
-
-    return () => {
-      cancelled = true;
-    };
+    void loadTrending();
   }, [isLoggedIn]);
 
-  const load = async () => {
-    setLoading(true);
-    setError(null);
-    try {
-      const userId = currentUser?.id;
-      const results = await Promise.allSettled([
-        scApi.getMyLikes(userId, 20),
-        scApi.getMyFollowings(userId, 12),
-        scApi.getMyPlaylists(userId, 10),
-      ]);
-
-      if (results[0].status === "fulfilled") {
-        const items = (results[0].value as any).collection ?? [];
-        const tracks: SCTrack[] = items.map((i: any) => i.track ?? i).filter(Boolean);
-        setRecommended(tracks);
-        setLikedTracks(tracks);
-      }
-      if (results[1].status === "fulfilled") {
-        setArtists((results[1].value as any).collection ?? []);
-      }
-      if (results[2].status === "fulfilled") {
-        const items = (results[2].value as any).collection ?? [];
-        setPlaylists(items.map((i: any) => i.playlist ?? i).filter(Boolean));
-      }
-
-      if (results.every((r) => r.status === "rejected")) {
-        setError("Не удалось загрузить данные SoundCloud");
-      }
-    } catch (e) {
-      setError(errorText(e, "Ошибка загрузки"));
-    } finally {
-      setLoading(false);
-    }
-  };
-
   useEffect(() => {
-    if (isLoggedIn) load();
-    else setLoading(false);
+    if (isLoggedIn) {
+      // Первый вход — с скелетонами; повторный — тихое обновление в фоне.
+      void load();
+    } else {
+      reset();
+    }
 
     // Автоматическое обновление данных при восстановлении сети
     return useNetworkStore.getState().onReconnect(() => {
@@ -210,7 +165,7 @@ export default function HomePage() {
                 Слушать избранное
               </button>
             )}
-            <button className="btn-ghost" onClick={load}>
+            <button className="btn-ghost" onClick={() => void load({ force: true })}>
               <ArrowClockwise size={14} style={{ marginRight: 6, verticalAlign: -2 }} />
               Обновить
             </button>
@@ -235,7 +190,11 @@ export default function HomePage() {
           <div className="empty-text">
             Проверь подключение к интернету или попробуй войти заново.
           </div>
-          <button className="btn-ghost" onClick={load} style={{ marginTop: 8 }}>
+          <button
+            className="btn-ghost"
+            onClick={() => void load({ force: true })}
+            style={{ marginTop: 8 }}
+          >
             Повторить
           </button>
         </div>
@@ -298,7 +257,7 @@ export default function HomePage() {
         </div>
       )}
 
-      {!loading && !error && recommended.length === 0 && playedEmpty(likedTracks) && (
+      {!loading && !error && recommended.length === 0 && likedTracks.length === 0 && (
         <div className="empty-state">
           <div className="empty-icon">
             <MusicNotes size={30} />
@@ -339,8 +298,4 @@ export default function HomePage() {
       </div>
     </div>
   );
-}
-
-function playedEmpty(arr: SCTrack[]) {
-  return arr.length === 0;
 }

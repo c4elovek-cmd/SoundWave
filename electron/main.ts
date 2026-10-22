@@ -2375,6 +2375,7 @@ function setupIPC() {  // Получить сохранённые настрой
         | {
             details?: string;
             state?: string;
+            artworkUrl?: string;
             largeText?: string;
             smallText?: string;
             startTimestamp?: number;
@@ -2395,13 +2396,21 @@ function setupIPC() {  // Получить сохранённые настрой
         `Discord: активность — «${presence.details ?? ""}» / «${presence.state ?? ""}»`
       );
 
+      // Discord принимает внешний URL как картинку активности. Поэтому
+      // показываем обложку играющего трека, а ключ из настроек — запасной
+      // вариант, когда обложки у трека нет.
+      const artwork = String(presence.artworkUrl ?? "").trim();
+      const configuredImage = String(store.get("discordLargeImage") ?? "").trim();
+
       discord.setActivity({
         details: presence.details,
         state: presence.state,
         largeText: presence.largeText,
         smallText: presence.smallText,
         largeImageKey:
-          String(store.get("discordLargeImage") ?? "") || DEFAULT_DISCORD_ASSET,
+          (artwork.startsWith("https://") ? artwork : "") ||
+          configuredImage ||
+          DEFAULT_DISCORD_ASSET,
         largeImageText: presence.largeText,
         startTimestamp: presence.startTimestamp,
       });
