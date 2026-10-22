@@ -1,7 +1,7 @@
 {
   "name": "soundwave",
   "private": true,
-  "version": "0.6.5",
+  "version": "0.6.6",
   "description": "Десктопный клиент SoundCloud в стиле Spotify",
   "author": "c4elovek-cmd",
   "license": "MIT",

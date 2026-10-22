@@ -1072,14 +1072,72 @@ fn register_media_keys(app: &AppHandle) {
 
 // --- Автообновление --------------------------------------------------------
 
-/// Проверить обновления: сравниваем текущую версию с последним релизом.
+/// Канал обновлений: stable, beta или alpha.
+fn update_channel() -> String {
+    config::load()
+        .get("updateChannel")
+        .and_then(|v| v.as_str())
+        .map(|s| s.to_string())
+        .filter(|s| matches!(s.as_str(), "stable" | "beta" | "alpha"))
+        .unwrap_or_else(|| "stable".to_string())
+}
+
+/// Адрес ленты обновлений для канала.
+///
+/// У каждого канала свой релиз на GitHub — ссылка на файл не меняется от
+/// версии к версии, а внутри лежит последняя сборка этого канала.
+fn channel_endpoint(channel: &str) -> String {
+    let channel = match channel {
+        "beta" => "beta",
+        "alpha" => "alpha",
+        _ => "stable",
+    };
+
+    format!(
+        "https://github.com/c4elovek-cmd/SoundWave/releases/download/{channel}/latest.json"
+    )
+}
+
+/// Сменить канал обновлений.
+#[tauri::command]
+fn set_update_channel(channel: String) -> Result<bool, String> {
+    let channel = match channel.as_str() {
+        "beta" | "alpha" | "stable" => channel,
+        _ => return Err("Неизвестный канал обновлений".to_string()),
+    };
+
+    let _ = config::set_value("updateChannel", Value::String(channel.to_string()));
+    Ok(true)
+}
+
+/// Текущий канал обновлений.
+#[tauri::command]
+fn get_update_channel() -> String {
+    update_channel()
+}
+
 #[tauri::command]
 async fn check_for_updates(app: AppHandle) -> Value {
     use tauri_plugin_updater::UpdaterExt;
 
     let current = app.package_info().version.to_string();
+    let channel = update_channel();
+    let endpoint = channel_endpoint(&channel);
 
-    let updater = match app.updater() {
+    // Свой адрес ленты: у каждого канала он свой.
+    let updater = match app
+        .updater_builder()
+        .endpoints(match reqwest::Url::parse(&endpoint) {
+            Ok(url) => vec![url],
+            Err(e) => {
+                return serde_json::json!({
+                    "ok": false,
+                    "error": format!("Неверный адрес обновлений: {e}"),
+                })
+            }
+        })
+        .and_then(|builder| builder.build())
+    {
         Ok(updater) => updater,
         Err(e) => {
             return serde_json::json!({
@@ -1095,11 +1153,13 @@ async fn check_for_updates(app: AppHandle) -> Value {
             "upToDate": false,
             "version": update.version,
             "current": current,
+            "channel": channel,
         }),
         Ok(None) => serde_json::json!({
             "ok": true,
             "upToDate": true,
             "current": current,
+            "channel": channel,
         }),
         Err(e) => serde_json::json!({
             "ok": false,
@@ -1533,6 +1593,8 @@ pub fn run() {
             agent_api_config,
             send_agent_response,
             check_for_updates,
+            set_update_channel,
+            get_update_channel,
             install_update,
             open_user_data,
             minimize_to_tray,

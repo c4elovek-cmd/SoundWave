@@ -165,11 +165,18 @@ declare global {
       setCloseToTray: (value: boolean) => Promise<boolean>;
 
       // Автообновление
+      // Канал обновлений: stable, beta или alpha
+      setUpdateChannel: (
+        channel: string
+      ) => Promise<{ ok: boolean; channel?: string }>;
+      // Текущий канал обновлений
+      getUpdateChannel: () => Promise<string>;
       checkForUpdates: () => Promise<{
         ok: boolean;
         upToDate?: boolean;
         version?: string;
         current?: string;
+        channel?: string;
         error?: string;
       }>;
       installUpdate: () => Promise<{ ok: boolean; error?: string }>;

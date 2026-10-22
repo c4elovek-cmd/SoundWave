@@ -77,6 +77,23 @@ jobs:
 
           $info | ConvertTo-Json -Depth 6 | Set-Content "src-tauri/target/release/bundle/nsis/latest.json" -Encoding UTF8
           Write-Output "latest.json готов для версии $version"
+      - name: Лента обновлений для канала
+        shell: pwsh
+        run: |
+          $version = (Get-Content "src-tauri/tauri.conf.json" -Raw | ConvertFrom-Json).version
+          $channel = if ($version -match "-alpha\.") { "alpha" } elseif ($version -match "-beta\.") { "beta" } else { "stable" }
+          $feed = "src-tauri/target/release/bundle/nsis/latest.json"
+
+          # Отдельный релиз на канал: ссылка на ленту постоянная,
+          # а внутри лежит последняя сборка этого канала.
+          gh release view $channel *> $null
+          if ($LASTEXITCODE -ne 0) {
+            gh release create $channel --title "SoundWave — канал $channel" --notes "Лента обновлений канала $channel." --prerelease 2>&1 | Out-Null
+          }
+          gh release upload $channel $feed --clobber
+          Write-Output "Лента канала $channel обновлена"
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
       - name: Прикрепление файлов к релизу
         shell: pwsh

@@ -188,12 +188,18 @@ export function createTauriBridge(): Window["electronAPI"] {
     openExternal: (url: string) => invoke<boolean>("open_external", { url }),
 
     // --- Автообновление ---
+    // Канал обновлений: stable, beta или alpha
+    setUpdateChannel: (channel: string) =>
+      invoke<{ ok: boolean; channel?: string }>("set_update_channel", { channel }),
+    // Текущий канал обновлений
+    getUpdateChannel: () => invoke<string>("get_update_channel"),
     checkForUpdates: () =>
       invoke<{
         ok: boolean;
         upToDate?: boolean;
         version?: string;
         current?: string;
+        channel?: string;
         error?: string;
       }>("check_for_updates"),
     installUpdate: () =>

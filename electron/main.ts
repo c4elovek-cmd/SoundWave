@@ -1505,6 +1505,23 @@ function parseCookieInput(
   return null;
 }
 
+/** Канал обновлений: stable, beta или alpha. */
+function updateChannel(): string {
+  const channel = String(store.get("updateChannel") ?? "stable");
+  return ["stable", "beta", "alpha"].includes(channel) ? channel : "stable";
+}
+
+/**
+ * Лента обновлений для канала.
+ *
+ * У каждого канала свой релиз на GitHub — ссылка постоянная, а внутри
+ * лежит последняя сборка этого канала.
+ */
+function applyChannelFeed(channel: string): void {
+  const url = `https://github.com/c4elovek-cmd/SoundWave/releases/download/${channel}/`;
+  autoUpdater.setFeedURL({ provider: "generic", url });
+}
+
 function setupIPC() {  // Получить сохранённые настройки
   ipcMain.handle("get-config", () => {
     return {
@@ -2437,6 +2454,23 @@ function setupIPC() {  // Получить сохранённые настрой
     return true;
   });
 
+  // Текущий канал обновлений
+  ipcMain.handle("get-update-channel", () => {
+    return updateChannel();
+  });
+
+  // Сменить канал обновлений: stable, beta или alpha
+  ipcMain.handle("set-update-channel", (_event, channel: string) => {
+    const value = ["stable", "beta", "alpha"].includes(channel)
+      ? channel
+      : "stable";
+
+    setStore("updateChannel", value);
+    applyChannelFeed(value);
+    log.info("Канал обновлений:", value);
+    return { ok: true, channel: value };
+  });
+
   // Автообновление: проверяем релиз на GitHub и качаем новую версию.
   ipcMain.handle("check-for-updates", async () => {
     if (!app.isPackaged) {
@@ -2562,7 +2596,9 @@ if (!hasSingleInstanceLock) {
       if (clientId) void discord.connect(clientId);
     }
 
-    // Автообновление: следим за релизом и сообщаем интерфейсу.
+
+  // Автообновление: следим за релизом и сообщаем интерфейсу.
+    applyChannelFeed(updateChannel());
     autoUpdater.autoDownload = true;
     autoUpdater.autoInstallOnAppQuit = true;
 
