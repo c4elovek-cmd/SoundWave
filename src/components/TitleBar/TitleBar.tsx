@@ -14,10 +14,22 @@ export default function TitleBar() {
   const runtime = useAppStore((state) => state.runtime);
 
   useEffect(() => {
-    void window.electronAPI?.windowIsMaximized?.().then(setMaximized);
+    let active = true;
+    void window.electronAPI?.windowIsMaximized?.().then((value) => {
+      if (active) setMaximized(value);
+    });
 
-    if (!window.electronAPI?.onWindowMaximizedChanged) return;
-    return window.electronAPI.onWindowMaximizedChanged(setMaximized);
+    if (!window.electronAPI?.onWindowMaximizedChanged) {
+      return () => {
+        active = false;
+      };
+    }
+
+    const unsubscribe = window.electronAPI.onWindowMaximizedChanged(setMaximized);
+    return () => {
+      active = false;
+      unsubscribe();
+    };
   }, []);
 
   return (
@@ -38,9 +50,13 @@ export default function TitleBar() {
       <div className="titlebar-controls">
         <button
           className="titlebar-btn"
-          onClick={() => {
+          onClick={async () => {
             logAction("window.minimize");
-            void window.electronAPI?.windowMinimize?.();
+            try {
+              await window.electronAPI?.windowMinimize?.();
+            } catch (error) {
+              console.error("Не удалось свернуть окно:", error);
+            }
           }}
           title="Свернуть"
           aria-label="Свернуть"
@@ -52,7 +68,12 @@ export default function TitleBar() {
           className="titlebar-btn"
           onClick={async () => {
             logAction("window.maximize");
-            setMaximized((await window.electronAPI?.windowToggleMaximize?.()) ?? false);
+            try {
+              const value = await window.electronAPI?.windowToggleMaximize?.();
+              if (typeof value === "boolean") setMaximized(value);
+            } catch (error) {
+              console.error("Не удалось изменить размер окна:", error);
+            }
           }}
           title={maximized ? "Восстановить" : "Развернуть"}
           aria-label={maximized ? "Восстановить" : "Развернуть"}
@@ -62,9 +83,13 @@ export default function TitleBar() {
 
         <button
           className="titlebar-btn close"
-          onClick={() => {
+          onClick={async () => {
             logAction("window.close");
-            void window.electronAPI?.windowClose?.();
+            try {
+              await window.electronAPI?.windowClose?.();
+            } catch (error) {
+              console.error("Не удалось закрыть окно:", error);
+            }
           }}
           title="Закрыть"
           aria-label="Закрыть"

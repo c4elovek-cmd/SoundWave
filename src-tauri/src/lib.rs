@@ -1164,35 +1164,35 @@ fn main_window(app: &tauri::AppHandle) -> Option<tauri::WebviewWindow> {
 }
 
 #[tauri::command]
-fn window_minimize(app: tauri::AppHandle) {
-    if let Some(win) = main_window(&app) {
-        let _ = win.minimize();
-    }
+async fn window_minimize(app: tauri::AppHandle) -> Result<bool, String> {
+    let win = main_window(&app).ok_or_else(|| "Главное окно не найдено".to_string())?;
+    win.minimize().map_err(|e| e.to_string())?;
+    Ok(true)
 }
 
 #[tauri::command]
-fn window_toggle_maximize(app: tauri::AppHandle) {
-    if let Some(win) = main_window(&app) {
-        if win.is_maximized().unwrap_or(false) {
-            let _ = win.unmaximize();
-        } else {
-            let _ = win.maximize();
-        }
+async fn window_toggle_maximize(app: tauri::AppHandle) -> Result<bool, String> {
+    let win = main_window(&app).ok_or_else(|| "Главное окно не найдено".to_string())?;
+    if win.is_maximized().map_err(|e| e.to_string())? {
+        win.unmaximize().map_err(|e| e.to_string())?;
+    } else {
+        win.maximize().map_err(|e| e.to_string())?;
     }
+    win.is_maximized().map_err(|e| e.to_string())
 }
 
 #[tauri::command]
-fn window_is_maximized(app: tauri::AppHandle) -> bool {
+async fn window_is_maximized(app: tauri::AppHandle) -> bool {
     main_window(&app)
         .and_then(|win| win.is_maximized().ok())
         .unwrap_or(false)
 }
 
 #[tauri::command]
-fn window_close(app: tauri::AppHandle) {
-    if let Some(win) = main_window(&app) {
-        let _ = win.close();
-    }
+async fn window_close(app: tauri::AppHandle) -> Result<bool, String> {
+    let win = main_window(&app).ok_or_else(|| "Главное окно не найдено".to_string())?;
+    win.close().map_err(|e| e.to_string())?;
+    Ok(true)
 }
 
 #[tauri::command]
@@ -1246,8 +1246,10 @@ pub fn run() {
                 use tauri::webview::Color;
 
                 let _ = win.set_background_color(Some(Color(18, 18, 18, 255)));
-                transparent::hide_border(&win.as_ref().window());
+                // Оставляем системные флаги resize/maximize: Tauri использует
+                // их для корректного maximize/restore. Светлую кайму скрывает DWM.
                 transparent::paint_frame(&win.as_ref().window(), 0x00121212);
+                transparent::hide_border(&win.as_ref().window());
                 corners::apply_webview(&win, corners::CORNER_RADIUS);
             }
 
