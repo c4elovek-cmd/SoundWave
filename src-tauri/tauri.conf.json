@@ -1,7 +1,7 @@
 {
   "$schema": "../node_modules/@tauri-apps/cli/config.schema.json",
   "productName": "SoundWave",
-  "version": "0.6.7",
+  "version": "0.6.8",
   "identifier": "com.c4elovek.soundwave",
   "build": {
     "frontendDist": "../dist",

@@ -11,7 +11,6 @@ import {
 import Sidebar from "./components/Sidebar/Sidebar";
 import TitleBar from "./components/TitleBar/TitleBar";
 import ToastHost from "./components/Toast/Toast";
-import { userUrl } from "./lib/soundcloudLinks";
 import TrackPage from "./pages/TrackPage";
 import ArtistPage from "./pages/ArtistPage";
 import { logAction } from "./lib/actionLog";
@@ -294,12 +293,9 @@ export default function App() {
               {isLoggedIn ? (
                 <button
                   className="user-chip"
-                  title="Открыть страницу профиля на SoundCloud"
+                  title="Открыть профиль внутри приложения"
                   onClick={() => {
-                    const url = userUrl(currentUser ?? {});
-                    if (!url) return;
-                    logAction("open_external", { url });
-                    void window.electronAPI?.openExternal?.(url);
+                    if (currentUser?.id) openArtist(currentUser.id);
                   }}
                 >
                   <div className="user-avatar">
