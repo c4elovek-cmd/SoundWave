@@ -79,6 +79,24 @@ declare global {
       setFullscreen: (value: boolean) => Promise<boolean>;
       onFullscreenChanged: (callback: (value: boolean) => void) => () => void;
       windowMinimize: () => Promise<boolean>;
+      // Открыть файл или папку
+      openPath: (target: string) => Promise<{ ok: boolean; error?: string }>;
+      // Скачивание трека
+      downloadTrack: (
+        trackId: number,
+        title: string,
+        artist: string
+      ) => Promise<{ ok: boolean; path?: string; error?: string }>;
+      onDownloadProgress: (
+        callback: (info: {
+          trackId: number;
+          percent: number;
+          state: string;
+          path?: string;
+          error?: string;
+        }) => void
+      ) => () => void;
+
       windowToggleMaximize: () => Promise<boolean>;
       windowIsMaximized: () => Promise<boolean>;
       windowClose: () => Promise<boolean>;

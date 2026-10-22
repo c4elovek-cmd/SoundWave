@@ -1159,6 +1159,233 @@ async fn install_update(app: AppHandle) -> Value {
     }
 }
 
+/// Открыть файл или папку средствами системы.
+#[tauri::command]
+fn open_path(path: String) -> Result<bool, String> {
+    #[cfg(windows)]
+    {
+        // start открывает файл в программе по умолчанию.
+        std::process::Command::new("cmd")
+            .args(["/C", "start", "", &path])
+            .spawn()
+            .map_err(|e| format!("Не удалось открыть: {e}"))?;
+        Ok(true)
+    }
+
+    #[cfg(not(windows))]
+    {
+        std::process::Command::new("xdg-open")
+            .arg(&path)
+            .spawn()
+            .map_err(|e| format!("Не удалось открыть: {e}"))?;
+        Ok(true)
+    }
+}
+// --- Скачивание -----------------------------------------------------------
+
+/// Имя файла без запрещённых символов Windows.
+fn safe_file_name(name: &str) -> String {
+    let cleaned: String = name
+        .chars()
+        .map(|c| match c {
+            '<' | '>' | ':' | '"' | '/' | '\\' | '|' | '?' | '*' => '_',
+            c if c.is_control() => ' ',
+            c => c,
+        })
+        .collect();
+
+    let trimmed = cleaned.trim().trim_matches('.').trim();
+    if trimmed.is_empty() {
+        "track".to_string()
+    } else {
+        trimmed.to_string()
+    }
+}
+
+/// Уникальное имя файла: если такой уже есть — добавляем номер.
+fn unique_path(dir: &std::path::Path, name: &str) -> std::path::PathBuf {
+    let path = dir.join(name);
+    if !path.exists() {
+        return path;
+    }
+
+    let stem = std::path::Path::new(name)
+        .file_stem()
+        .map(|s| s.to_string_lossy().to_string())
+        .unwrap_or_else(|| "track".to_string());
+    let ext = std::path::Path::new(name)
+        .extension()
+        .map(|s| format!(".{}", s.to_string_lossy()))
+        .unwrap_or_default();
+
+    for n in 2..500 {
+        let candidate = dir.join(format!("{stem} ({n}){ext}"));
+        if !candidate.exists() {
+            return candidate;
+        }
+    }
+
+    dir.join(name)
+}
+
+/// Сообщает интерфейсу о ходе скачивания.
+fn report_download(app: &AppHandle, track_id: u64, state: &str, percent: u64, extra: Value) {
+    let mut payload = serde_json::json!({
+        "trackId": track_id,
+        "percent": percent,
+        "state": state,
+    });
+
+    if let Some(map) = payload.as_object_mut() {
+        if let Some(path) = extra.get("path") {
+            map.insert("path".to_string(), path.clone());
+        }
+        if let Some(error) = extra.get("error") {
+            map.insert("error".to_string(), error.clone());
+        }
+    }
+
+    let _ = app.emit("download-progress", payload);
+}
+
+/// Скачать трек в папку «Загрузки».
+///
+/// Берём обычный mp3 (progressive), качаем файл потоком и сообщаем
+/// интерфейсу о прогрессе событием `download-progress`.
+#[tauri::command]
+async fn download_track(
+    app: AppHandle,
+    state: State<'_, AppState>,
+    track_id: u64,
+    title: String,
+    artist: String,
+) -> Result<Value, String> {
+    use tokio::io::AsyncWriteExt;
+
+    report_download(&app, track_id, "started", 0, Value::Null);
+
+    let stream = state.sc.resolve_download(track_id).await.map_err(|e| {
+        report_download(
+            &app,
+            track_id,
+            "error",
+            0,
+            serde_json::json!({ "error": e }),
+        );
+        e
+    })?;
+
+    let dir = app
+        .path()
+        .download_dir()
+        .unwrap_or_else(|_| std::path::PathBuf::from("."));
+    let file_name = format!(
+        "{} - {}.{}",
+        safe_file_name(&artist),
+        safe_file_name(&title),
+        stream.extension
+    );
+    let path = unique_path(&dir, &file_name);
+
+    let mut file = tokio::fs::File::create(&path).await.map_err(|e| {
+        let message = format!("Не удалось создать файл: {e}");
+        report_download(
+            &app,
+            track_id,
+            "error",
+            0,
+            serde_json::json!({ "error": message }),
+        );
+        message
+    })?;
+
+    let client = reqwest::Client::new();
+    let total_parts = stream.parts.len().max(1);
+
+    // Части идут по порядку: у mp3 она одна, у HLS — init и сегменты.
+    for (index, part_url) in stream.parts.iter().enumerate() {
+        let mut response = client.get(part_url).send().await.map_err(|e| {
+            let message = format!("Не удалось скачать трек: {e}");
+            report_download(
+                &app,
+                track_id,
+                "error",
+                0,
+                serde_json::json!({ "error": message }),
+            );
+            message
+        })?;
+
+        if !response.status().is_success() {
+            let message = format!("Сервер отдал ошибку {}", response.status());
+            report_download(
+                &app,
+                track_id,
+                "error",
+                0,
+                serde_json::json!({ "error": message }),
+            );
+            return Err(message);
+        }
+
+        let total = response.content_length().unwrap_or(0);
+        let mut written: u64 = 0;
+
+        loop {
+            let chunk = match response.chunk().await {
+                Ok(Some(chunk)) => chunk,
+                Ok(None) => break,
+                Err(e) => {
+                    let message = format!("Ошибка загрузки: {e}");
+                    report_download(
+                        &app,
+                        track_id,
+                        "error",
+                        0,
+                        serde_json::json!({ "error": message }),
+                    );
+                    return Err(message);
+                }
+            };
+
+            if let Err(e) = file.write_all(&chunk).await {
+                let message = format!("Не удалось записать файл: {e}");
+                report_download(
+                    &app,
+                    track_id,
+                    "error",
+                    0,
+                    serde_json::json!({ "error": message }),
+                );
+                return Err(message);
+            }
+
+            written += chunk.len() as u64;
+
+            let part_percent = if total > 0 {
+                (written * 100 / total).min(100)
+            } else {
+                0
+            };
+            let percent = ((index as u64 * 100 + part_percent) / total_parts as u64).min(99);
+            report_download(&app, track_id, "progress", percent, Value::Null);
+        }
+    }
+
+    let _ = file.flush().await;
+    let _ = file.sync_all().await;
+
+    let path_text = path.to_string_lossy().to_string();
+    report_download(
+        &app,
+        track_id,
+        "done",
+        100,
+        serde_json::json!({ "path": path_text }),
+    );
+
+    Ok(serde_json::json!({ "ok": true, "path": path_text }))
+}
 // --- Окно ------------------------------------------------------------------
 
 fn main_window(app: &tauri::AppHandle) -> Option<tauri::WebviewWindow> {
@@ -1334,6 +1561,8 @@ pub fn run() {
             window_is_maximized,
             window_close,
             window_start_dragging,
+            download_track,
+            open_path,
             show_window,
             set_fullscreen,
         ])

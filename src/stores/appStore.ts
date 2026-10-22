@@ -41,6 +41,8 @@ interface AppState {
   uploadedTracks: SCTrack[];
   playlists: SCPlaylist[];
   setLikedTracks: (t: SCTrack[]) => void;
+  /** Лайки текущей сессии, которых ещё нет в ответе API. */
+  pendingLikes: SCTrack[];
   setUploadedTracks: (t: SCTrack[]) => void;
   setPlaylists: (p: SCPlaylist[]) => void;
   /** Лайк или снятие лайка трека. */
@@ -128,9 +130,17 @@ export const useAppStore = create<AppState>((set, get) => ({
   setLoggedIn: (isLoggedIn, currentUser) => set({ isLoggedIn, currentUser }),
 
   likedTracks: [],
+  pendingLikes: [],
   uploadedTracks: [],
   playlists: [],
-  setLikedTracks: (likedTracks) => set({ likedTracks }),
+  setLikedTracks: (likedTracks) =>
+    set((s) => {
+      // Лайк, сделанный только что, в ответе API ещё не появился —
+      // сохраняем его, иначе он пропадёт из «Мне нравится».
+      const known = new Set(likedTracks.map((x) => x.id));
+      const pending = s.pendingLikes.filter((x) => !known.has(x.id));
+      return { likedTracks: [...pending, ...likedTracks], pendingLikes: pending };
+    }),
   setUploadedTracks: (uploadedTracks) => set({ uploadedTracks }),
   setPlaylists: (playlists) => set({ playlists }),
 
@@ -149,12 +159,17 @@ export const useAppStore = create<AppState>((set, get) => ({
       set({ likeError: res?.error ?? "Не удалось изменить лайк" });
       return;
     }
-
     set({
       likeError: null,
       likedTracks: liked
         ? state.likedTracks.filter((item) => item.id !== track.id)
         : [track, ...state.likedTracks],
+      // Лайк ещё не появится в ответе API — запоминаем его отдельно.
+      pendingLikes: liked
+        ? state.pendingLikes.filter((item) => item.id !== track.id)
+        : state.pendingLikes.some((item) => item.id === track.id)
+          ? state.pendingLikes
+          : [track, ...state.pendingLikes],
     });
   },
 

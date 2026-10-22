@@ -1,8 +1,15 @@
-import { Play, MusicNotes, Heart } from "@phosphor-icons/react";
+import { Play, MusicNotes, Heart, DownloadSimple, Check } from "@phosphor-icons/react";
 import { SCTrack } from "../../types/soundcloud";
+import { useEffect } from "react";
 import { usePlayerStore } from "../../stores/playerStore";
 import { useAppStore } from "../../stores/appStore";
+import {
+  downloadTrack,
+  ensureDownloadSubscription,
+  useDownloadStore,
+} from "../../stores/downloadStore";
 import { formatDuration, formatNumber } from "../../lib/soundcloud-api";
+import { logAction } from "../../lib/actionLog";
 import "./TrackRow.css";
 
 interface Props {
@@ -23,6 +30,7 @@ export default function TrackRow({
   showArtist = true,
 }: Props) {
   const { currentTrack, isPlaying, play, togglePlay } = usePlayerStore();
+  const download = useDownloadStore((s) => s.downloads[track.id]);
   const likedTracks = useAppStore((s) => s.likedTracks);
   const toggleLike = useAppStore((s) => s.toggleLike);
 
@@ -33,6 +41,11 @@ export default function TrackRow({
   const artwork = track.artwork_url
     ? track.artwork_url.replace("-large", "-t120x120")
     : "";
+
+  // События скачивания приходят из бэкенда — одно на всё приложение.
+  useEffect(() => {
+    ensureDownloadSubscription();
+  }, []);
 
   const handlePlay = (e: React.MouseEvent) => {
     e.stopPropagation();
@@ -89,6 +102,34 @@ export default function TrackRow({
       </span>
 
       <span className="track-duration">{formatDuration(track.duration)}</span>
+
+      <button
+        className={`track-download ${download?.state ?? ""}`}
+        onClick={(e) => {
+          e.stopPropagation();
+          logAction("track.download", { id: track.id, title: track.title });
+          void downloadTrack(
+            track.id,
+            track.title,
+            track.user?.username ?? ""
+          );
+        }}
+        title="Скачать трек"
+        aria-label="Скачать трек"
+        disabled={download?.state === "started" || download?.state === "progress"}
+      >
+        {download?.state === "done" ? (
+          <Check size={16} weight="bold" style={{ color: "var(--success)" }} />
+        ) : download?.state === "started" || download?.state === "progress" ? (
+          <span className="track-download-percent">{download.percent}%</span>
+        ) : download?.state === "error" ? (
+          <span className="track-download-percent" title={download.error}>
+            !
+          </span>
+        ) : (
+          <DownloadSimple size={16} />
+        )}
+      </button>
 
       <button
         className={`track-like ${liked ? "liked" : ""}`}

@@ -38,11 +38,17 @@ export default function LibraryPage({ mode }: Props) {
           ? await scApi.getMyLikes(currentUser?.id, 100)
           : await scApi.getMyTracks(currentUser?.id, 100);
       const items = (res as any).collection ?? [];
-      const list: SCTrack[] = items.map((i: any) => i.track ?? i).filter(Boolean);
-      setTracks(list);
       setNextHref((res as any).next_href ?? null);
-      if (mode === "likes") setLikedTracks(list);
-      else setUploadedTracks(list);
+      const list: SCTrack[] = items.map((i: any) => i.track ?? i).filter(Boolean);
+
+      if (mode === "likes") {
+        // В сторе список дополнен свежими лайками — показываем его.
+        setLikedTracks(list);
+        setTracks(useAppStore.getState().likedTracks);
+      } else {
+        setTracks(list);
+        setUploadedTracks(list);
+      }
     } catch (e) {
       setError(errorText(e, "Ошибка загрузки"));
     } finally {
@@ -169,6 +175,7 @@ export default function LibraryPage({ mode }: Props) {
             <span>Статистика</span>
             <span className="right">Время</span>
             <span />
+              <span />
           </div>
 
           {tracks.map((track, i) => (

@@ -16,6 +16,7 @@ import {
   copyFileSync,
   existsSync,
   mkdirSync,
+  promises as fsPromises,
   readFileSync,
   unlinkSync,
 } from "fs";
@@ -1517,10 +1518,10 @@ function setupIPC() {  // Получить сохранённые настрой
   // Сохранить тему
   ipcMain.handle("set-theme", (_event, theme: string, base?: string) => {
     setStore("theme", theme);
-    // Фон окна совпадает с фоном приложения — тогда скруглённые углы
-    // не выделяются тёмной рамкой.
+    // Фон окна оставляем прозрачным: скруглённые углы рисует .app-shell,
+    // и за ними видно рабочий стол. Непрозрачный фон закрыл бы углы.
     if (base && mainWindow && !mainWindow.isDestroyed()) {
-      mainWindow.setBackgroundColor(base === "light" ? "#ffffff" : "#121212");
+      mainWindow.setBackgroundColor("#00000000");
     }
     return true;
   });
@@ -1531,6 +1532,224 @@ function setupIPC() {  // Получить сохранённые настрой
     return true;
   });
 
+  /** Имя файла без запрещённых символов Windows. */
+  function safeFileName(name: string): string {
+    const cleaned = name
+      .replace(/[<>:"/\\|?*]/g, "_")
+      .replace(/[\u0000-\u001f]/g, " ")
+      .trim()
+      .replace(/^\.+|\.+$/g, "")
+      .trim();
+
+    return cleaned || "track";
+  }
+
+  /** Уникальное имя файла: если такой уже есть — добавляем номер. */
+  function uniqueFilePath(dir: string, name: string): string {
+    const target = path.join(dir, name);
+    if (!existsSync(target)) return target;
+
+    const stem = path.basename(name, path.extname(name));
+    const ext = path.extname(name);
+
+    for (let n = 2; n < 500; n++) {
+      const candidate = path.join(dir, `${stem} (${n})${ext}`);
+      if (!existsSync(candidate)) return candidate;
+    }
+
+    return target;
+  }
+
+  /**
+   * Прямая ссылка на mp3 трека.
+   *
+   * Для воспроизведения подходит любой играбельный поток, а для скачивания
+   * нужен обычный progressive-mp3 — это один файл.
+   */
+  /**
+   * Файлы HLS-плейлиста: init-сегмент и куски, по порядку.
+   *
+   * Ссылки в плейлисте могут быть относительными — дополняем их адресом
+   * самого плейлиста.
+   */
+  function parseHlsParts(playlist: string, baseUrl: string): string[] {
+    const parts: string[] = [];
+
+    for (const raw of playlist.split("\n")) {
+      const line = raw.trim();
+      if (!line) continue;
+
+      // #EXT-X-MAP:URI="..." — init-сегмент fMP4.
+      if (line.startsWith("#EXT-X-MAP:")) {
+        const match = line.match(/URI="([^"]+)"/);
+        if (match) parts.push(new URL(match[1], baseUrl).toString());
+        continue;
+      }
+
+      // Остальные строки — сегменты.
+      if (!line.startsWith("#")) {
+        parts.push(new URL(line, baseUrl).toString());
+      }
+    }
+
+    return parts;
+  }
+
+  /**
+   * Источник аудио для скачивания.
+   *
+   * Для воспроизведения подходит любой играбельный поток, а для скачивания
+   * нужен цельный файл: обычный mp3 либо склеенные сегменты HLS.
+   */
+  async function resolveDownloadSource(
+    trackId: number
+  ): Promise<{ parts: string[]; extension: string }> {
+    const id = await getClientId();
+    const res = await withScThrottle(async () =>
+      fetchWithRetry(`${API_V2}/tracks/${trackId}?client_id=${id}`, {
+        headers: await apiHeaders(),
+      })
+    );
+
+    if (!res.ok) throw new Error(`SoundCloud ответил ${res.status}`);
+
+    const track = await res.json();
+    const transcodings: any[] = track?.media?.transcodings ?? [];
+
+    /** Ссылка на сам файл: у транскодировки она лежит в JSON-манифесте. */
+    const manifestUrl = async (transcoding: any): Promise<string> => {
+      const manifestRes = await withScThrottle(async () =>
+        fetchWithRetry(transcoding.url, { headers: await apiHeaders() })
+      );
+      if (!manifestRes.ok) {
+        throw new Error(`SoundCloud ответил ${manifestRes.status}`);
+      }
+
+      const manifest = await manifestRes.json();
+      if (!manifest?.url) throw new Error("SoundCloud не вернул ссылку на аудио");
+      return manifest.url as string;
+    };
+
+    // 1. Обычный mp3 — идеальный вариант, один файл.
+    const progressive = transcodings.find(
+      (t) => t?.format?.protocol === "progressive"
+    );
+    if (progressive) {
+      return { parts: [await manifestUrl(progressive)], extension: "mp3" };
+    }
+
+    // 2. HLS с fMP4: init-сегмент плюс куски — из них получается .m4a.
+    const hls =
+      transcodings.find(
+        (t) =>
+          t?.format?.protocol === "hls" &&
+          String(t?.format?.mime_type ?? "").includes("mp4")
+      ) ?? transcodings.find((t) => t?.format?.protocol === "hls");
+
+    if (!hls) throw new Error("У трека нет потока, который можно скачать");
+
+    const playlistUrl = await manifestUrl(hls);
+    const playlistRes = await fetch(playlistUrl);
+    if (!playlistRes.ok) {
+      throw new Error(`Плейлист недоступен: ${playlistRes.status}`);
+    }
+
+    const parts = parseHlsParts(await playlistRes.text(), playlistUrl);
+    if (!parts.length) throw new Error("Плейлист трека пустой — скачать нечего");
+
+    return { parts, extension: "m4a" };
+  }
+
+
+  // Открыть файл или папку средствами системы
+  ipcMain.handle("open-path", async (_event, target: string) => {
+    try {
+      if (target.includes(":") && !target.startsWith("http")) {
+        await shell.openPath(target);
+      } else {
+        shell.showItemInFolder(target);
+      }
+      return { ok: true };
+    } catch (e) {
+      const message = e instanceof Error ? e.message : "Не удалось открыть файл";
+      log.warn("Открытие не удалось:", message);
+      return { ok: false, error: message };
+    }
+  });
+  // Скачать трек в папку «Загрузки»
+  ipcMain.handle(
+    "download-track",
+    async (_event, trackId: number, title: string, artist: string) => {
+      const report = (
+        state: string,
+        percent: number,
+        extra: Record<string, unknown> = {}
+      ) => {
+        mainWindow?.webContents.send("download-progress", {
+          trackId,
+          percent,
+          state,
+          ...extra,
+        });
+      };
+
+      report("started", 0);
+
+      try {
+        const source = await resolveDownloadSource(trackId);
+        const dir = app.getPath("downloads");
+        const target = uniqueFilePath(
+          dir,
+          `${safeFileName(artist)} - ${safeFileName(title)}.${source.extension}`
+        );
+
+        const handle = await fsPromises.open(target, "w");
+        const totalParts = Math.max(source.parts.length, 1);
+
+        try {
+          // Части идут по порядку: у mp3 она одна, у HLS — init и сегменты.
+          for (let index = 0; index < source.parts.length; index++) {
+            const response = await fetch(source.parts[index]);
+            if (!response.ok || !response.body) {
+              throw new Error(`Сервер отдал ошибку ${response.status}`);
+            }
+
+            const total = Number(response.headers.get("content-length") ?? 0);
+            const reader = response.body.getReader();
+            let written = 0;
+
+            for (;;) {
+              const { done, value } = await reader.read();
+              if (done) break;
+              if (!value) continue;
+
+              await handle.write(value);
+              written += value.length;
+
+              const partPercent =
+                total > 0 ? Math.min(100, Math.floor((written * 100) / total)) : 0;
+              report(
+                "progress",
+                Math.min(99, Math.floor((index * 100 + partPercent) / totalParts))
+              );
+            }
+          }
+        } finally {
+          await handle.close();
+        }
+
+        report("done", 100, { path: target });
+        log.info("Трек скачан:", target);
+        return { ok: true, path: target };
+      } catch (e) {
+        const message =
+          e instanceof Error ? e.message : "Не удалось скачать трек";
+        log.warn("Скачивание не удалось:", message);
+        report("error", 0, { error: message });
+        return { ok: false, error: message };
+      }
+    }
+  );
   // Окно входа — единственное дополнительное окно приложения
   ipcMain.handle("open-auth-window", () => {
     return navigateAuthWindow("/auth");

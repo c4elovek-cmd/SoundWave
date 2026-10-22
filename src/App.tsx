@@ -10,6 +10,7 @@ import {
 } from "@phosphor-icons/react";
 import Sidebar from "./components/Sidebar/Sidebar";
 import TitleBar from "./components/TitleBar/TitleBar";
+import ToastHost from "./components/Toast/Toast";
 import Player from "./components/Player/Player";
 import LyricsPanel from "./components/Lyrics/LyricsPanel";
 import KaraokeFullscreen from "./components/Lyrics/KaraokeFullscreen";
@@ -357,6 +358,8 @@ export default function App() {
       </div>
 
       <Player />
+
+      <ToastHost />
 
       {karaokeFullscreen && <KaraokeFullscreen />}
       {settingsOpen && <SettingsModal />}

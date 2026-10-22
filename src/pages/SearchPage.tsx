@@ -177,6 +177,7 @@ export default function SearchPage() {
                 <span>Статистика</span>
                 <span className="right">Время</span>
                 <span />
+              <span />
               </div>
               {tracks.map((track, i) => (
                 <TrackRow key={track.id} track={track} index={i} queue={tracks} />

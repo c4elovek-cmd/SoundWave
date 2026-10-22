@@ -127,6 +127,7 @@ export default function HomePage() {
               <span>Статистика</span>
               <span className="right">Время</span>
               <span />
+              <span />
             </div>
             {trending.map((track, i) => (
               <TrackRow key={track.id} track={track} index={i} queue={trending} />
@@ -199,6 +200,7 @@ export default function HomePage() {
             <span>Статистика</span>
             <span className="right">Время</span>
             <span />
+              <span />
           </div>
           {recommended.map((track, i) => (
             <TrackRow key={track.id} track={track} index={i} queue={recommended} />

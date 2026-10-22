@@ -1,7 +1,7 @@
 /* ===== Track Row ===== */
 .track-row {
   display: grid;
-  grid-template-columns: 32px 1fr 120px 160px 60px 40px;
+  grid-template-columns: 32px 1fr 120px 160px 60px 40px 40px;
   align-items: center;
   gap: 14px;
   padding: 6px 12px;
@@ -275,4 +275,45 @@
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
+}
+
+/* Кнопка скачивания трека */
+.track-download {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 32px;
+  height: 32px;
+  border-radius: 50%;
+  color: var(--text-secondary);
+  opacity: 0;
+  transition: opacity var(--transition-fast), color var(--transition-fast);
+}
+
+.track-row:hover .track-download,
+.track-download.progress,
+.track-download.started,
+.track-download.done,
+.track-download.error {
+  opacity: 1;
+}
+
+.track-download:hover {
+  background: var(--bg-hover);
+  color: var(--accent);
+}
+
+.track-download:disabled {
+  cursor: default;
+}
+
+.track-download-percent {
+  font-size: 9.5px;
+  font-weight: 700;
+  letter-spacing: 0.2px;
+  color: var(--accent);
+}
+
+.track-download.error .track-download-percent {
+  color: var(--danger, #e5484d);
 }
