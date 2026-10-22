@@ -178,6 +178,7 @@ export const usePlayerStore = create<PlayerState>((set, get) => ({
       const message = errorText(e, "Не удалось получить ссылку на трек");
       const isNet =
         message.includes("интернет") ||
+        message.includes("сеть") ||
         (typeof navigator !== "undefined" && !navigator.onLine);
       set({
         error: isNet
@@ -235,15 +236,15 @@ export const usePlayerStore = create<PlayerState>((set, get) => ({
         }
 
         if (data.type === Hls.ErrorTypes.NETWORK_ERROR) {
-          if (typeof navigator !== "undefined" && !navigator.onLine) {
-            console.warn("HLS сетевой сбой: нет интернета, ожидаем восстановление...");
-            set({
-              waitingForNetwork: true,
-              error: "Ожидание подключения к интернету...",
-              isPlaying: false,
-            });
-            return;
-          }
+          console.warn("HLS сетевой сбой: повторяем загрузку потока");
+          set({
+            waitingForNetwork: true,
+            error: "Связь прервалась. Повторяем загрузку…",
+            isPlaying: false,
+          });
+          // HLS сам делает последовательные повторы; если сеть уже вернулась,
+          // сразу продолжит загрузку. Глобальный online-listener разбудит его,
+          // если браузер сообщил о полном отключении.
           hls.startLoad();
         } else if (data.type === Hls.ErrorTypes.MEDIA_ERROR) {
           hls.recoverMediaError();
@@ -339,6 +340,17 @@ export const usePlayerStore = create<PlayerState>((set, get) => ({
     const { audio, currentTrack, queue, queueIndex } = get();
 
     logAction("resume", { id: currentTrack?.id });
+
+    // Нет сети — не дёргаем аудио вхолостую, показываем ожидание.
+    if (typeof navigator !== "undefined" && !navigator.onLine) {
+      set({
+        shouldPlay: true,
+        waitingForNetwork: true,
+        isPlaying: false,
+        error: "Ожидание сети: воспроизведение начнётся при подключении",
+      });
+      return;
+    }
 
     if (!audio) {
       // Трек ещё грузится или был остановлен — включаем заново.

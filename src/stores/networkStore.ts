@@ -91,31 +91,25 @@ export const useNetworkStore = create<NetworkState>((set, get) => ({
       const controller = new AbortController();
       const timer = setTimeout(() => controller.abort(), 4000);
 
-      // Пробуем SoundCloud или резервный адрес
-      const ok = await fetch("https://api-v2.soundcloud.com/version", {
+      // HEAD-запрос на CDN SoundCloud: ответ no-cors непрозрачный, но
+      // успешное завершение означает, что интернет и домен доступны.
+      const ok = await fetch("https://a-v2.sndcdn.com/assets/images/sc-icons/favicon-2cadd14bdb.ico", {
         method: "HEAD",
         mode: "no-cors",
         cache: "no-cache",
         signal: controller.signal,
       })
         .then(() => true)
-        .catch(async () => {
-          return await fetch("https://soundcloud.com/favicon.ico", {
-            method: "HEAD",
-            mode: "no-cors",
-            cache: "no-cache",
-            signal: controller.signal,
-          })
-            .then(() => true)
-            .catch(() => false);
-        });
+        .catch(() => false);
 
       clearTimeout(timer);
 
-      if (ok) {
-        get().setOnline(true);
-      } else {
+      // Не снимаем флаг офлайна, если тест выполнялся, когда приложение уже
+      // было онлайн: иначе фоновые проверки генерируют ложное восстановление.
+      if (!ok) {
         get().setOnline(false);
+      } else if (!get().isOnline) {
+        get().setOnline(true);
       }
 
       set({ isChecking: false });
@@ -147,8 +141,9 @@ export function initNetworkMonitoring(): () => void {
   initialized = true;
 
   const handleOnline = () => {
-    // navigator.onLine сработал — сразу переключаем статус
-    useNetworkStore.getState().setOnline(true);
+    // navigator.onLine сообщает только о сетевом интерфейсе — проверяем,
+    // что доступен сам интернет, прежде чем снимать режим офлайна.
+    void useNetworkStore.getState().checkConnectivity();
   };
 
   const handleOffline = () => {
