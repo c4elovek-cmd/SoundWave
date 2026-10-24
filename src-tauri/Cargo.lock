@@ -3952,7 +3952,7 @@ dependencies = [
 
 [[package]]
 name = "soundwave"
-version = "0.6.11"
+version = "0.6.12"
 dependencies = [
  "axum",
  "once_cell",

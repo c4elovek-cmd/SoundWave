@@ -35,6 +35,7 @@ import { runtimeName } from "./lib/runtime";
 import { setActionLogEnabled } from "./lib/actionLog";
 import { useSettingsStore } from "./stores/settingsStore";
 import { initNetworkMonitoring, useNetworkStore } from "./stores/networkStore";
+import "./stores/historyStore";
 import "./components/Layout/Layout.css";
 
 export default function App() {

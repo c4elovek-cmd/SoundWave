@@ -235,6 +235,14 @@ export class DiscordRpc {
     const activity = this.activity;
     this.nonce += 1;
 
+    // Картинки и подписи живут во вложенном объекте assets: плоские поля
+    // уровня activity Discord молча игнорирует, и обложки в профиле нет.
+    const assets: Record<string, string> = {};
+    if (activity?.largeImageKey) assets.large_image = activity.largeImageKey;
+    const largeTooltip = activity?.largeImageText || activity?.largeText;
+    if (largeTooltip) assets.large_text = largeTooltip;
+    if (activity?.smallText) assets.small_text = activity.smallText;
+
     this.write(OPCODE_FRAME, {
       cmd: "SET_ACTIVITY",
       args: {
@@ -243,10 +251,7 @@ export class DiscordRpc {
           ? {
               details: activity.details,
               state: activity.state,
-              large_text: activity.largeText,
-              small_text: activity.smallText,
-              large_image: activity.largeImageKey || undefined,
-              large_image_text: activity.largeImageText,
+              ...(Object.keys(assets).length ? { assets } : {}),
               timestamps: activity.startTimestamp
                 ? { start: activity.startTimestamp }
                 : undefined,

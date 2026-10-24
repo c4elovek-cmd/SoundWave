@@ -1,0 +1,264 @@
+/* Полки-карусели на главной. */
+
+.shelf-scroll {
+  display: flex;
+  gap: 16px;
+  overflow-x: auto;
+  overflow-y: hidden;
+  padding-bottom: 10px;
+  scroll-snap-type: x proximity;
+  scrollbar-width: thin;
+  scrollbar-color: var(--bg-active) transparent;
+}
+
+.shelf-scroll::-webkit-scrollbar {
+  height: 8px;
+}
+
+.shelf-scroll::-webkit-scrollbar-thumb {
+  background: var(--bg-active);
+  border-radius: var(--radius-full);
+}
+
+.shelf-scroll::-webkit-scrollbar-thumb:hover {
+  background: var(--text-disabled);
+}
+
+.shelf-scroll::-webkit-scrollbar-track {
+  background: transparent;
+}
+
+/* Карточка без своей фиксированной вёрстки (артисты, плейлисты) внутри полки. */
+.shelf-static-card {
+  flex: 0 0 168px;
+  scroll-snap-align: start;
+}
+
+/* Скелетоны полок наследуют общий shimmer из Pages.css. */
+.skeleton-title {
+  height: 20px;
+  width: 220px;
+  border-radius: var(--radius-full);
+  margin-bottom: 14px;
+}
+
+.track-card-skeleton .skeleton-square {
+  width: 100%;
+  aspect-ratio: 1;
+  border-radius: var(--radius-md);
+  margin-bottom: 10px;
+}
+
+.track-card-skeleton .skeleton-line {
+  height: 12px;
+  border-radius: var(--radius-full);
+  margin-top: 8px;
+}
+
+.track-card-skeleton .skeleton-line.short {
+  width: 60%;
+}
+
+/* Карточка лайков в hero подрастает — кнопки выравниваем по центру. */
+.hero-actions:has(.hero-liked) {
+  align-items: center;
+}
+
+/* Карточка трека в полке. */
+.track-card {
+  flex: 0 0 168px;
+  scroll-snap-align: start;
+  padding: 12px;
+  border-radius: var(--radius-md);
+  background: transparent;
+  border: none;
+  cursor: pointer;
+  position: relative;
+  transition: background var(--transition-base);
+  font-family: inherit;
+  text-align: left;
+  color: var(--text-primary);
+}
+
+.track-card:hover,
+.track-card:focus-visible {
+  background: var(--bg-elevated);
+  outline: none;
+}
+
+.track-card-art {
+  position: relative;
+  width: 100%;
+  aspect-ratio: 1;
+  border-radius: var(--radius-md);
+  overflow: hidden;
+  background: var(--bg-elevated);
+  box-shadow: var(--shadow-md);
+  margin-bottom: 10px;
+}
+
+.track-card-art img {
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+  display: block;
+}
+
+.track-card-art .track-card-placeholder {
+  width: 100%;
+  height: 100%;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  color: var(--text-disabled);
+  background: linear-gradient(135deg, var(--bg-elevated), var(--bg-active));
+}
+
+.track-card-play {
+  position: absolute;
+  right: 10px;
+  bottom: 10px;
+  width: 42px;
+  height: 42px;
+  border-radius: 50%;
+  border: none;
+  background: var(--accent);
+  color: #fff;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  cursor: pointer;
+  opacity: 0;
+  transform: translateY(6px);
+  transition:
+    opacity 160ms cubic-bezier(0.2, 0.8, 0.3, 1),
+    transform 160ms cubic-bezier(0.2, 0.8, 0.3, 1),
+    background var(--transition-base);
+  box-shadow: 0 6px 16px rgba(0, 0, 0, 0.35);
+}
+
+.track-card:hover .track-card-play,
+.track-card:focus-visible .track-card-play,
+.track-card-play.visible {
+  opacity: 1;
+  transform: none;
+}
+
+.track-card-play:hover {
+  background: var(--accent-hover);
+}
+
+.track-card-title {
+  font-size: 14px;
+  font-weight: 700;
+  line-height: 1.3;
+  overflow: hidden;
+  display: -webkit-box;
+  -webkit-line-clamp: 2;
+  -webkit-box-orient: vertical;
+}
+
+.track-card-artist {
+  margin-top: 3px;
+  font-size: 12px;
+  font-weight: 500;
+  color: var(--text-secondary);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+/* Карточка играющего трека — акцентная точка полки. */
+.track-card.playing .track-card-title {
+  color: var(--accent);
+}
+
+/* Скелетон карточки для первой загрузки. */
+.track-card-skeleton {
+  flex: 0 0 168px;
+  padding: 12px;
+}
+
+.track-card-skeleton .skeleton-square {
+  width: 100%;
+  aspect-ratio: 1;
+  border-radius: var(--radius-md);
+  margin-bottom: 10px;
+}
+
+.track-card-skeleton .skeleton-line {
+  height: 12px;
+  border-radius: var(--radius-full);
+  margin-top: 8px;
+}
+
+.track-card-skeleton .skeleton-line.short {
+  width: 60%;
+}
+
+/* Плитка плейлиста-лайков рядом с приветствием. */
+.hero-liked {
+  display: flex;
+  align-items: center;
+  gap: 14px;
+  padding: 10px 18px 10px 10px;
+  border-radius: var(--radius-lg);
+  background: var(--bg-elevated);
+  border: 1px solid var(--border);
+  cursor: pointer;
+  transition: background var(--transition-base), border-color var(--transition-base);
+}
+
+.hero-liked:hover,
+.hero-liked:focus-visible {
+  background: var(--bg-hover);
+  border-color: var(--text-disabled);
+  outline: none;
+}
+
+.hero-liked-art {
+  width: 56px;
+  height: 56px;
+  border-radius: var(--radius-sm);
+  overflow: hidden;
+  background: var(--bg-active);
+  box-shadow: var(--shadow-sm);
+  flex: none;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  color: var(--text-secondary);
+}
+
+.hero-liked-art img {
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+  display: block;
+}
+
+.hero-liked-info {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  min-width: 0;
+}
+
+.hero-liked-title {
+  font-size: 14px;
+  font-weight: 700;
+}
+
+.hero-liked-sub {
+  font-size: 12px;
+  color: var(--text-secondary);
+}
+
+/* Без анимаций — сразу рабочие состояния. */
+:root.no-animations .track-card-play {
+  transition: none;
+}
+
+:root.no-animations .track-menu {
+  animation: none;
+}

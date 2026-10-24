@@ -375,18 +375,24 @@ async fn send_activity<W>(
             if let Some(state) = activity.state {
                 value.insert("state".to_string(), json!(state));
             }
-            if let Some(large_text) = activity.large_text {
-                value.insert("large_text".to_string(), json!(large_text));
-            }
-            if let Some(small_text) = activity.small_text {
-                value.insert("small_text".to_string(), json!(small_text));
-            }
+
+            // Картинки и подписи к ним живут во вложенном объекте assets:
+            // плоские поля уровня activity Discord молча игнорирует, и вместо
+            // обложки в профиле остаётся плейсхолдер.
+            let mut assets = serde_json::Map::new();
             if let Some(image) = activity.large_image_key {
-                value.insert("large_image".to_string(), json!(image));
+                assets.insert("large_image".to_string(), json!(image));
             }
-            if let Some(image_text) = activity.large_image_text {
-                value.insert("large_image_text".to_string(), json!(image_text));
+            if let Some(text) = activity.large_image_text.or(activity.large_text) {
+                assets.insert("large_text".to_string(), json!(text));
             }
+            if let Some(text) = activity.small_text {
+                assets.insert("small_text".to_string(), json!(text));
+            }
+            if !assets.is_empty() {
+                value.insert("assets".to_string(), Value::Object(assets));
+            }
+
             if let Some(start) = activity.start_timestamp {
                 value.insert("timestamps".to_string(), json!({ "start": start }));
             }

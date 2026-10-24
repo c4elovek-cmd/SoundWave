@@ -48,6 +48,7 @@ interface PlayerState {
   setRepeat: (mode: RepeatMode) => void;
   toggleShuffle: () => void;
   addToQueue: (track: SCTrack) => void;
+  playNext: (track: SCTrack) => void;
   removeFromQueue: (index: number) => void;
   removeTrackById: (trackId: number) => void;
   clearQueue: () => void;
@@ -502,6 +503,21 @@ export const usePlayerStore = create<PlayerState>((set, get) => ({
       return;
     }
     set((state) => ({ queue: [...state.queue, track] }));
+  },
+
+  playNext: (track) => {
+    if (track.drm) {
+      set({ error: "Трек защищён DRM — в очередь его не добавить" });
+      logAction("skip_drm", { id: track.id, title: track.title });
+      return;
+    }
+    set((state) => {
+      // Пустая очередь — просто добавляем; иначе вставляем за текущим.
+      const at = state.queue.length === 0 ? 0 : state.queueIndex + 1;
+      const queue = [...state.queue];
+      queue.splice(at, 0, track);
+      return { queue };
+    });
   },
 
   removeFromQueue: (index: number) => {

@@ -1,6 +1,6 @@
 import { Play, MusicNotes, Heart, DownloadSimple, Check } from "@phosphor-icons/react";
 import { SCTrack } from "../../types/soundcloud";
-import { useEffect } from "react";
+import { useEffect, useState } from "react";
 import { usePlayerStore } from "../../stores/playerStore";
 import { useAppStore } from "../../stores/appStore";
 import {
@@ -11,6 +11,7 @@ import {
 import { formatDuration, formatNumber } from "../../lib/soundcloud-api";
 import { logAction } from "../../lib/actionLog";
 import { trackUrl, userUrl } from "../../lib/soundcloudLinks";
+import TrackMenu from "./TrackMenu";
 import "./TrackRow.css";
 
 interface Props {
@@ -40,6 +41,7 @@ export default function TrackRow({
   const liked = isLiked ?? likedTracks.some((item) => item.id === track.id);
   const isCurrent = currentTrack?.id === track.id;
   const isPlayingThis = isCurrent && isPlaying;
+  const [menu, setMenu] = useState<{ x: number; y: number } | null>(null);
 
   const artwork = track.artwork_url
     ? track.artwork_url.replace("-large", "-t120x120")
@@ -83,6 +85,10 @@ export default function TrackRow({
     <div
       className={`track-row ${isCurrent ? "playing" : ""}`}
       onDoubleClick={() => play(track, queue || [track], index)}
+      onContextMenu={(e) => {
+        e.preventDefault();
+        setMenu({ x: e.clientX, y: e.clientY });
+      }}
     >
       <div className="track-num" onClick={handlePlay}>
         {isPlayingThis ? (
@@ -187,6 +193,16 @@ export default function TrackRow({
       >
         <Heart size={16} weight={liked ? "fill" : "regular"} />
       </button>
+
+      {menu && (
+        <TrackMenu
+          track={track}
+          queue={queue}
+          x={menu.x}
+          y={menu.y}
+          onClose={() => setMenu(null)}
+        />
+      )}
     </div>
   );
 }

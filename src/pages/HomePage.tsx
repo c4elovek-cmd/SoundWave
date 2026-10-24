@@ -3,12 +3,13 @@ import { MusicNotes, ArrowClockwise } from "@phosphor-icons/react";
 import { useAppStore } from "../stores/appStore";
 import { usePlayerStore } from "../stores/playerStore";
 import { logAction } from "../lib/actionLog";
-import TrackRow from "../components/Track/TrackRow";
-import Card from "../components/Track/Card";
 import "./Pages.css";
 import { useNetworkStore } from "../stores/networkStore";
 import { useHomeStore } from "../stores/homeStore";
-
+import { useHistoryStore } from "../stores/historyStore";
+import Shelf from "../components/Home/Shelf";
+import TrackCard from "../components/Home/TrackCard";
+import Card from "../components/Track/Card";
 /** Жанры и настроения для главной — как карточки на SoundCloud. */
 const MOODS = [
   { title: "Хип-хоп", subtitle: "Ритм и бит", query: "hip hop", from: "#ff5500", to: "#c2410c" },
@@ -21,10 +22,26 @@ const MOODS = [
   { title: "Эмбиент", subtitle: "Для работы и сна", query: "ambient", from: "#64748b", to: "#1e293b" },
 ];
 
+/** Полка карточек-скелетонов на время первой загрузки. */
+function ShelfSkeleton({ count = 6 }: { count?: number }) {
+  return (
+    <div className="section shelf">
+      <div className="skeleton skeleton-title" />
+      <div className="shelf-scroll">
+        {Array.from({ length: count }, (_, i) => (
+          <div key={i} className="track-card-skeleton">
+            <div className="skeleton skeleton-square" />
+            <div className="skeleton skeleton-line" />
+            <div className="skeleton skeleton-line short" />
+          </div>
+        ))}
+      </div>
+    </div>
+  );
+}
+
 export default function HomePage() {
-  const { isLoggedIn, currentUser, likedTracks, setSearchQuery, setView } =
-    useAppStore();
-  const { play } = usePlayerStore();
+  const { isLoggedIn, currentUser, setSearchQuery, setView } = useAppStore();
 
   // Данные главной живут в сторе: при возврате на страницу они уже на месте,
   // поэтому скелетоны не мелькают.
@@ -33,6 +50,7 @@ export default function HomePage() {
     artists,
     playlists,
     trending,
+    more,
     loading,
     trendingLoading,
     error,
@@ -40,6 +58,8 @@ export default function HomePage() {
     loadTrending,
     reset,
   } = useHomeStore();
+
+  const history = useHistoryStore((s) => s.tracks);
 
   // Для гостей показываем популярное — charts SoundCloud доступен без входа
   useEffect(() => {
@@ -69,6 +89,35 @@ export default function HomePage() {
     return "Добрый вечер";
   })();
 
+  /** Сетка жанров — общая для гостя и для залогиненного. */
+  const moodGrid = (
+    <div className="section">
+      <div className="section-header">
+        <span className="section-title">Жанры и настроения</span>
+      </div>
+      <div className="mood-grid">
+        {MOODS.map((mood) => (
+          <button
+            key={mood.title}
+            className="mood-card"
+            style={{
+              background: `linear-gradient(135deg, ${mood.from}, ${mood.to})`,
+            }}
+            onClick={() => {
+              logAction("mood", { mood: mood.query });
+              setSearchQuery(mood.query);
+              setView("search");
+            }}
+            title={`Найти: ${mood.query}`}
+          >
+            <span className="mood-title">{mood.title}</span>
+            <span className="mood-subtitle">{mood.subtitle}</span>
+          </button>
+        ))}
+      </div>
+    </div>
+  );
+
   if (!isLoggedIn) {
     return (
       <div className="page">
@@ -88,60 +137,17 @@ export default function HomePage() {
           </div>
         </div>
 
-        {trendingLoading && (
-          <div className="section">
-            {Array.from({ length: 6 }, (_, i) => (
-              <div key={i} className="skeleton skeleton-row" />
-            ))}
-          </div>
-        )}
+        {trendingLoading && <ShelfSkeleton />}
 
         {trending.length > 0 && (
-          <div className="section">
-            <div className="section-header">
-              <span className="section-title">Популярное сейчас</span>
-            </div>
-            <div className="track-list-header">
-              <span>#</span>
-              <span>Трек</span>
-              <span>Жанр</span>
-              <span>Статистика</span>
-              <span className="right">Время</span>
-              <span />
-              <span />
-            </div>
-            {trending.map((track, i) => (
-              <TrackRow key={track.id} track={track} index={i} queue={trending} />
+          <Shelf title="Популярное сейчас">
+            {trending.map((track) => (
+              <TrackCard key={track.id} track={track} queue={trending} />
             ))}
-          </div>
+          </Shelf>
         )}
 
-        {/* Жанры и настроения — как на SoundCloud, но в нашем оформлении */}
-        <div className="section">
-          <div className="section-header">
-            <span className="section-title">Жанры и настроения</span>
-          </div>
-          <div className="mood-grid">
-            {MOODS.map((mood) => (
-              <button
-                key={mood.title}
-                className="mood-card"
-                style={{
-                  background: `linear-gradient(135deg, ${mood.from}, ${mood.to})`,
-                }}
-                onClick={() => {
-                  logAction("mood", { mood: mood.query });
-                  setSearchQuery(mood.query);
-                  setView("search");
-                }}
-                title={`Найти: ${mood.query}`}
-              >
-                <span className="mood-title">{mood.title}</span>
-                <span className="mood-subtitle">{mood.subtitle}</span>
-              </button>
-            ))}
-          </div>
-        </div>
+        {moodGrid}
       </div>
     );
   }
@@ -159,8 +165,32 @@ export default function HomePage() {
           <div className="hero-actions">
             {recommended.length > 0 && (
               <button
+                className="hero-liked"
+                onClick={() => setView("likes")}
+                title="Открыть любимые треки"
+              >
+                <div className="hero-liked-art">
+                  {recommended[0].artwork_url ? (
+                    <img
+                      src={recommended[0].artwork_url.replace("-large", "-t120x120")}
+                      alt=""
+                    />
+                  ) : (
+                    <MusicNotes size={22} weight="light" />
+                  )}
+                </div>
+                <div className="hero-liked-info">
+                  <span className="hero-liked-title">Любимые треки</span>
+                  <span className="hero-liked-sub">{recommended.length} треков</span>
+                </div>
+              </button>
+            )}
+            {recommended.length > 0 && (
+              <button
                 className="btn-accent"
-                onClick={() => play(recommended[0], recommended, 0)}
+                onClick={() =>
+                  usePlayerStore.getState().play(recommended[0], recommended, 0)
+                }
               >
                 Слушать избранное
               </button>
@@ -174,11 +204,10 @@ export default function HomePage() {
       )}
 
       {loading && (
-        <div className="section">
-          {Array.from({ length: 6 }).map((_, i) => (
-            <div key={i} className="skeleton skeleton-row" />
-          ))}
-        </div>
+        <>
+          <ShelfSkeleton />
+          <ShelfSkeleton count={4} />
+        </>
       )}
 
       {error && !loading && (
@@ -200,64 +229,68 @@ export default function HomePage() {
         </div>
       )}
 
-      {!loading && !error && recommended.length > 0 && (
-        <div className="section">
-          <div className="section-header">
-            <span className="section-title">Любимые треки</span>
-          </div>
-          <div className="track-list-header">
-            <span>#</span>
-            <span>Трек</span>
-            <span>Жанр</span>
-            <span>Статистика</span>
-            <span className="right">Время</span>
-            <span />
-              <span />
-          </div>
-          {recommended.map((track, i) => (
-            <TrackRow key={track.id} track={track} index={i} queue={recommended} />
+      {!loading && !error && history.length > 0 && (
+        <Shelf title="Недавно слушал">
+          {history.slice(0, 12).map((track) => (
+            <TrackCard key={`h-${track.id}`} track={track} queue={history.slice(0, 12)} />
           ))}
-        </div>
+        </Shelf>
+      )}
+
+      {!loading && !error && recommended.length > 0 && (
+        <Shelf
+          title="Любимые треки"
+          action={
+            recommended.length > 0
+              ? { label: `Показать все (${recommended.length})`, onClick: () => setView("likes") }
+              : undefined
+          }
+        >
+          {recommended.slice(0, 12).map((track) => (
+            <TrackCard key={track.id} track={track} queue={recommended} />
+          ))}
+        </Shelf>
+      )}
+
+      {!loading && more.length > 0 && (
+        <Shelf title="Похоже на то, что ты любишь">
+          {more.map((track) => (
+            <TrackCard key={`m-${track.id}`} track={track} queue={more} />
+          ))}
+        </Shelf>
       )}
 
       {!loading && artists.length > 0 && (
-        <div className="section">
-          <div className="section-header">
-            <span className="section-title">Твои артисты</span>
-          </div>
-          <div className="card-grid">
-            {artists.map((artist) => (
+        <Shelf title="Твои артисты">
+          {artists.map((artist) => (
+            <div key={artist.id} className="shelf-static-card">
               <Card
-                key={artist.id}
                 title={artist.username}
                 subtitle={`${artist.track_count ?? 0} треков`}
                 artwork={artist.avatar_url}
                 round
+                onClick={() => artist.id && useAppStore.getState().openArtist(artist.id)}
               />
-            ))}
-          </div>
-        </div>
+            </div>
+          ))}
+        </Shelf>
       )}
 
       {!loading && playlists.length > 0 && (
-        <div className="section">
-          <div className="section-header">
-            <span className="section-title">Твои плейлисты</span>
-          </div>
-          <div className="card-grid">
-            {playlists.map((pl) => (
+        <Shelf title="Твои плейлисты">
+          {playlists.map((pl) => (
+            <div key={pl.id} className="shelf-static-card">
               <Card
-                key={pl.id}
                 title={pl.title}
                 subtitle={`${pl.track_count} треков`}
                 artwork={pl.artwork_url}
               />
-            ))}
-          </div>
-        </div>
+            </div>
+          ))}
+        </Shelf>
       )}
 
-      {!loading && !error && recommended.length === 0 && likedTracks.length === 0 && (
+      {!loading && !error && recommended.length === 0 && history.length === 0 && (
         <div className="empty-state">
           <div className="empty-icon">
             <MusicNotes size={30} />
@@ -270,32 +303,7 @@ export default function HomePage() {
         </div>
       )}
 
-      {/* Жанры и настроения — как на SoundCloud, но в нашем оформлении */}
-      <div className="section">
-        <div className="section-header">
-          <span className="section-title">Жанры и настроения</span>
-        </div>
-        <div className="mood-grid">
-          {MOODS.map((mood) => (
-            <button
-              key={mood.title}
-              className="mood-card"
-              style={{
-                background: `linear-gradient(135deg, ${mood.from}, ${mood.to})`,
-              }}
-              onClick={() => {
-                logAction("mood", { mood: mood.query });
-                setSearchQuery(mood.query);
-                setView("search");
-              }}
-              title={`Найти: ${mood.query}`}
-            >
-              <span className="mood-title">{mood.title}</span>
-              <span className="mood-subtitle">{mood.subtitle}</span>
-            </button>
-          ))}
-        </div>
-      </div>
+      {moodGrid}
     </div>
   );
 }

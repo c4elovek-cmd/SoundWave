@@ -2,6 +2,7 @@ import { create } from "zustand";
 import { scApi } from "../lib/soundcloud-api";
 import { errorText } from "../lib/errorText";
 import { useAppStore } from "./appStore";
+import { useHistoryStore } from "./historyStore";
 import { SCPlaylist, SCTrack, SCUser } from "../types/soundcloud";
 
 /**
@@ -18,6 +19,8 @@ interface HomeState {
   artists: SCUser[];
   playlists: SCPlaylist[];
   trending: SCTrack[];
+  /** Похожие на последний прослушанный/лайкнутый трек. */
+  more: SCTrack[];
 
   /** Идёт первая загрузка — только тогда рисуем скелетоны. */
   loading: boolean;
@@ -36,6 +39,7 @@ export const useHomeStore = create<HomeState>((set, get) => ({
   artists: [],
   playlists: [],
   trending: [],
+  more: [],
   // Первая загрузка: скелетоны уместны, пока данных ещё нет.
   loading: true,
   trendingLoading: true,
@@ -79,6 +83,29 @@ export const useHomeStore = create<HomeState>((set, get) => ({
         set({ playlists: items.map((i: any) => i.playlist ?? i).filter(Boolean) });
       }
 
+      // «Похоже на то, что ты любишь»: related от последнего прослушанного
+      // трека, а если истории нет — от первого лайка. Не мешает основному
+      // блоку: ошибка загрузки related ничего не ломает.
+      const likes = get().recommended;
+      const seed =
+        useHistoryStore.getState().tracks[0] ?? likes[0] ?? null;
+
+      if (seed) {
+        try {
+          const related = await scApi.getRelated(seed.id, 12);
+          const known = new Set([
+            ...useHistoryStore.getState().tracks.map((t) => t.id),
+            ...likes.map((t) => t.id),
+            seed.id,
+          ]);
+          set({
+            more: (related.collection ?? []).filter((t) => !known.has(t.id)),
+          });
+        } catch {
+          set({ more: [] });
+        }
+      }
+
       if (results.every((r) => r.status === "rejected")) {
         set({ error: "Не удалось загрузить данные SoundCloud" });
       } else {
@@ -119,6 +146,7 @@ export const useHomeStore = create<HomeState>((set, get) => ({
       recommended: [],
       artists: [],
       playlists: [],
+      more: [],
       loading: false,
       error: null,
       loadedAt: null,

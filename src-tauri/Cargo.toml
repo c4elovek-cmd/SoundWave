@@ -1,6 +1,6 @@
 [package]
 name = "soundwave"
-version = "0.6.11"
+version = "0.6.12"
 description = "Десктопный клиент SoundCloud"
 authors = ["c4elovek-cmd"]
 license = "MIT"
