@@ -2022,7 +2022,13 @@ function setupIPC() {  // Получить сохранённые настрой
         );
 
         if (source.extension === "mp3") {
-          await fsPromises.rename(tempPath, target);
+          // rename не работает между дисками — на этот случай копируем.
+          try {
+            await fsPromises.rename(tempPath, target);
+          } catch {
+            await fsPromises.copyFile(tempPath, target);
+            await fsPromises.unlink(tempPath).catch(() => undefined);
+          }
         } else {
           report("progress", 95);
           await convertToMp3(tempPath, target);
