@@ -1906,7 +1906,12 @@ function setupIPC() {  // Получить сохранённые настрой
   }
 
   /** Перекодировать файл в mp3. Бросает ошибку, если ffmpeg не справился. */
-  function convertToMp3(input: string, output: string): Promise<void> {
+  function convertToMp3(
+    input: string,
+    output: string,
+    title: string,
+    artist: string
+  ): Promise<void> {
     const ffmpeg = findFfmpeg();
     if (!ffmpeg) {
       return Promise.reject(
@@ -1929,6 +1934,11 @@ function setupIPC() {  // Получить сохранённые настрой
           "libmp3lame",
           "-q:a",
           "2",
+          // Теги — чтобы плееры показывали исполнителя и название.
+          "-metadata",
+          `title=${title}`,
+          "-metadata",
+          `artist=${artist}`,
           output,
         ],
         { windowsHide: true }
@@ -2031,7 +2041,7 @@ function setupIPC() {  // Получить сохранённые настрой
           }
         } else {
           report("progress", 95);
-          await convertToMp3(tempPath, target);
+          await convertToMp3(tempPath, target, title, artist);
           await fsPromises.unlink(tempPath).catch(() => undefined);
         }
 

@@ -1495,7 +1495,14 @@ async fn download_track(
     // Качаем во временный файл: итоговый путь занимаем только готовым mp3,
     // чтобы в «Загрузках» не появлялись недокачанные обрывки.
     let temp_dir = std::env::temp_dir();
-    let temp_name = format!("soundwave-{track_id}-{}.{}", std::process::id(), stream.extension);
+    let stamp = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| d.as_millis())
+        .unwrap_or(0);
+    let temp_name = format!(
+        "soundwave-{track_id}-{stamp}.{}",
+        stream.extension
+    );
     let temp_path = temp_dir.join(temp_name);
 
     let mut file = tokio::fs::File::create(&temp_path).await.map_err(|e| {
@@ -1627,7 +1634,13 @@ async fn download_track(
             let _ = tokio::fs::remove_file(&temp_path).await;
         }
     } else {
-        let Some(ffmpeg) = find_ffmpeg() else {
+        // Поиск ffmpeg запускает процесс — уводим его из потока рантайма.
+        let ffmpeg = tokio::task::spawn_blocking(find_ffmpeg)
+            .await
+            .ok()
+            .flatten();
+
+        let Some(ffmpeg) = ffmpeg else {
             let _ = tokio::fs::remove_file(&temp_path).await;
             let message = "Для сохранения в mp3 нужен ffmpeg — установите его и повторите"
                 .to_string();
@@ -1648,6 +1661,12 @@ async fn download_track(
             .arg("-i")
             .arg(&temp_path)
             .args(["-vn", "-codec:a", "libmp3lame", "-q:a", "2"])
+            // Теги — чтобы плееры показывали исполнителя и название,
+            // а не имя файла.
+            .arg("-metadata")
+            .arg(format!("title={title}"))
+            .arg("-metadata")
+            .arg(format!("artist={artist}"))
             .arg(&path)
             .output()
             .await;
