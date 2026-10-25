@@ -5,7 +5,7 @@ import {
   DownloadSimple,
   MusicNotes,
   ArrowSquareOut,
-} from "@phosphor-icons/react";
+} from "../lib/icons";
 import { scApi } from "../lib/soundcloud-api";
 import { errorText } from "../lib/errorText";
 import { usePlayerStore } from "../stores/playerStore";

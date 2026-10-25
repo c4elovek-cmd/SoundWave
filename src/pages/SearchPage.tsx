@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState } from "react";
-import { MagnifyingGlass, X, MusicNotes, User } from "@phosphor-icons/react";
+import { MagnifyingGlass, X, MusicNotes, User } from "../lib/icons";
 import { useAppStore } from "../stores/appStore";
 import { scApi } from "../lib/soundcloud-api";
 import { SCTrack, SCUser, SCPlaylist } from "../types/soundcloud";

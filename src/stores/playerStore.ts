@@ -5,6 +5,9 @@ import { scApi } from "../lib/soundcloud-api";
 import { logAction } from "../lib/actionLog";
 import { errorText } from "../lib/errorText";
 
+/** Момент последнего обновления позиции, пока окно было скрыто. */
+let lastHiddenSync = 0;
+
 interface PlayerState {
   // Состояние
   currentTrack: SCTrack | null;
@@ -268,12 +271,19 @@ export const usePlayerStore = create<PlayerState>((set, get) => ({
 
     audio.addEventListener("timeupdate", () => {
       const d = audio.duration || 0;
-      if (d > 0) {
-        set({
-          progress: audio.currentTime / d,
-          savedTimeOnDisconnect: audio.currentTime,
-        });
-      }
+      if (d <= 0) return;
+
+      // В скрытом окне ререндеры не видны, а ЦП тратится. Обновляем
+      // позицию редко — savedTimeOnDisconnect нужен для восстановления
+      // после обрыва сети, пяти секунд достаточно.
+      const now = Date.now();
+      if (document.hidden && now - lastHiddenSync < 5000) return;
+      lastHiddenSync = now;
+
+      set({
+        progress: audio.currentTime / d,
+        savedTimeOnDisconnect: audio.currentTime,
+      });
     });
 
     audio.addEventListener("waiting", () => {

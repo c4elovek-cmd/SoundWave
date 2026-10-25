@@ -158,8 +158,12 @@ impl SoundCloud {
 
         let token = self.access_token.lock().ok().and_then(|t| t.clone());
         if let Some(token) = token {
-            if let Ok(value) = HeaderValue::from_str(&format!("OAuth {token}")) {
-                headers.insert("Authorization", value);
+            // Просроченный OAuth-токен ломает даже публичные запросы (401),
+            // поэтому его не отправляем: анонимные запросы работают и так.
+            if !crate::session::token_expired(&token) {
+                if let Ok(value) = HeaderValue::from_str(&format!("OAuth {token}")) {
+                    headers.insert("Authorization", value);
+                }
             }
         }
 
@@ -179,6 +183,68 @@ impl SoundCloud {
         let cookie = self.cookie.lock().map(|c| c.clone()).unwrap_or_default();
         let token = self.access_token.lock().ok().and_then(|t| t.clone());
         (cookie, token)
+    }
+
+    /// Обновляет OAuth-сессию SoundCloud по refresh-токену.
+    ///
+    /// Access-токен живёт сутки; когда он истекает, даже поиск отвечает 401.
+    /// SoundCloud отдаёт новую пару токенов стандартным OAuth-запросом,
+    /// а client_id берём из claims старого токена — так делает веб-клиент.
+    /// Возвращает обновлённый заголовок Cookie для сохранения в настройках.
+    pub async fn refresh_session(&self) -> Result<String, String> {
+        let (header, token) = self.session();
+        let Some(token) = token else {
+            return Err("нет access-токена".to_string());
+        };
+        let Some(refresh) = crate::session::cookie_value(&header, "oauth_refresh_token") else {
+            return Err("в cookies нет oauth_refresh_token".to_string());
+        };
+        let Some(client_id) = crate::session::token_client_id(&token) else {
+            return Err("не удалось прочитать client_id из токена".to_string());
+        };
+
+        let body = format!(
+            "client_id={client_id}&grant_type=refresh_token&refresh_token={refresh}"
+        );
+
+        let response = self
+            .client
+            .post("https://secure.soundcloud.com/oauth/token")
+            .header(USER_AGENT, HeaderValue::from_static(BROWSER_UA))
+            .header(REFERER, HeaderValue::from_static("https://soundcloud.com/"))
+            .header(
+                "Content-Type",
+                HeaderValue::from_static("application/x-www-form-urlencoded; charset=UTF-8"),
+            )
+            .body(body)
+            .send()
+            .await
+            .map_err(|e| format!("запрос refresh: {e}"))?;
+
+        if !response.status().is_success() {
+            return Err(format!("SoundCloud отклонил refresh: {}", response.status()));
+        }
+
+        let json: Value = response
+            .json()
+            .await
+            .map_err(|e| format!("разбор ответа refresh: {e}"))?;
+
+        let access = json
+            .get("access_token")
+            .and_then(|v| v.as_str())
+            .ok_or("в ответе refresh нет access_token")?;
+        let new_refresh = json.get("refresh_token").and_then(|v| v.as_str());
+
+        let mut new_header = crate::session::with_cookie(&header, "oauth_token", access);
+        if let Some(new_refresh) = new_refresh {
+            new_header =
+                crate::session::with_cookie(&new_header, "oauth_refresh_token", new_refresh);
+        }
+
+        self.set_session(new_header.clone(), Some(access.to_string()));
+
+        Ok(new_header)
     }
 
     /// Запрос к внутреннему API.

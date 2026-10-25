@@ -18,10 +18,14 @@ import {
   mkdirSync,
   promises as fsPromises,
   readFileSync,
+  readdirSync,
+  statSync,
   unlinkSync,
 } from "fs";
 import { randomBytes } from "crypto";
 import { fileURLToPath } from "url";
+import { spawn } from "child_process";
+import os from "os";
 import Store from "electron-store";
 import log from "electron-log";
 import { autoUpdater } from "electron-updater";
@@ -1050,7 +1054,8 @@ async function getSyncedLyrics(
  * Там нет CORS-ограничений, и Cookie можно передавать свободно.
  *
  * Плюс OAuth-токен: без него приватные коллекции пользователя
- * (лайки, подписки, плейлисты) недоступны.
+ * (лайки, подписки, плейлисты) недоступны. Просроченный токен
+ * не отправляем — он ломает даже публичные запросы (401).
  */
 async function apiHeaders(): Promise<Record<string, string>> {
   const headers: Record<string, string> = {
@@ -1060,12 +1065,136 @@ async function apiHeaders(): Promise<Record<string, string>> {
   };
 
   const token = await getAccessToken();
-  if (token) headers.Authorization = `OAuth ${token}`;
+  if (token && !scTokenExpired(token)) {
+    headers.Authorization = `OAuth ${token}`;
+  }
 
   const cookie = await getCookieHeader();
   if (cookie) headers.Cookie = cookie;
 
   return headers;
+}
+
+/** Истёк ли access-токен SoundCloud (JWT, exp, запас — минута). */
+function scTokenExpired(token: string): boolean {
+  try {
+    const payload = JSON.parse(
+      Buffer.from(token.split(".")[1], "base64url").toString("utf8")
+    );
+    return typeof payload.exp === "number" && payload.exp * 1000 < Date.now() + 60_000;
+  } catch {
+    return false;
+  }
+}
+
+/** client_id из claims токена — нужен для обновления сессии. */
+function scClientIdFromToken(token: string): string | null {
+  try {
+    const payload = JSON.parse(
+      Buffer.from(token.split(".")[1], "base64url").toString("utf8")
+    );
+    return typeof payload.client_id === "string" ? payload.client_id : null;
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * Продлевает OAuth-сессию SoundCloud по refresh-токену.
+ *
+ * Access-токен живёт сутки; когда он истекает, даже поиск отвечает 401.
+ * SoundCloud отдаёт новую пару токенов стандартным OAuth-запросом,
+ * а client_id берём из claims старого токена — так делает веб-клиент.
+ * Новые cookies кладём и в партицию (их читают запросы), и в конфиг
+ * (их читает восстановление сессии при следующем запуске).
+ */
+async function refreshScSession(): Promise<boolean> {
+  try {
+    const ses = session.fromPartition(SC_PARTITION);
+    const cookies = await ses.cookies.get({ domain: ".soundcloud.com" });
+    const token = cookies.find((c) => c.name === "oauth_token")?.value;
+    const refreshToken = cookies.find((c) => c.name === "oauth_refresh_token")?.value;
+
+    if (!token || !refreshToken) return false;
+    const clientId = scClientIdFromToken(token);
+    if (!clientId) return false;
+
+    const body = new URLSearchParams({
+      client_id: clientId,
+      grant_type: "refresh_token",
+      refresh_token: refreshToken,
+    });
+
+    const res = await fetch("https://secure.soundcloud.com/oauth/token", {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/x-www-form-urlencoded; charset=UTF-8",
+        "User-Agent": BROWSER_UA,
+        Referer: "https://soundcloud.com/",
+      },
+      body,
+    });
+
+    if (!res.ok) {
+      log.warn(`Обновление сессии SoundCloud отклонено: ${res.status}`);
+      return false;
+    }
+
+    const data = (await res.json()) as {
+      access_token?: string;
+      refresh_token?: string;
+    };
+    if (!data.access_token) return false;
+
+    const setCookie = async (name: string, value: string) => {
+      await ses.cookies.set({
+        url: "https://soundcloud.com",
+        name,
+        value,
+        domain: ".soundcloud.com",
+        path: "/",
+        secure: true,
+        httpOnly: true,
+        sameSite: "no_restriction",
+      });
+    };
+
+    await setCookie("oauth_token", data.access_token);
+    if (data.refresh_token) await setCookie("oauth_refresh_token", data.refresh_token);
+
+    // Заголовок в конфиге: восстановление сессии при запуске и Rust-версия
+    // читают его, если партиция пуста.
+    const fresh = await ses.cookies.get({ domain: ".soundcloud.com" });
+    setStore(
+      "scCookies",
+      fresh.map((c) => `${c.name}=${c.value}`).join("; ")
+    );
+
+    log.info("Сессия SoundCloud обновлена по refresh-токену");
+    return true;
+  } catch (error) {
+    log.warn("Обновление сессии SoundCloud не удалось:", error);
+    return false;
+  }
+}
+
+/** Продлевает сессию, если до конца access-токена меньше получаса. */
+async function refreshScSessionIfNeeded(): Promise<void> {
+  const token = await getAccessToken();
+  if (!token) return;
+  if (!scTokenExpired(token)) {
+    // До истечения больше минуты — проверим запас заранее.
+    try {
+      const payload = JSON.parse(
+        Buffer.from(token.split(".")[1], "base64url").toString("utf8")
+      );
+      const leftMs = payload.exp * 1000 - Date.now();
+      if (leftMs > 30 * 60_000) return;
+    } catch {
+      return;
+    }
+  }
+  await refreshScSession();
 }
 
 /** Поднимает локальный API для агентов, если он включён в настройках. */
@@ -1191,6 +1320,14 @@ function createWindow() {
 
   mainWindow.on("maximize", sendMaximized);
   mainWindow.on("unmaximize", sendMaximized);
+
+  // Фокус окна: в фоне интерфейс ставит анимации на паузу и не жжёт CPU.
+  mainWindow.on("focus", () => {
+    mainWindow?.webContents.send("window-focus", true);
+  });
+  mainWindow.on("blur", () => {
+    mainWindow?.webContents.send("window-focus", false);
+  });
 
   // Загрузка
   if (VITE_DEV_SERVER_URL) {
@@ -1552,8 +1689,9 @@ function setupIPC() {  // Получить сохранённые настрой
   /** Имя файла без запрещённых символов Windows. */
   function safeFileName(name: string): string {
     const cleaned = name
-      .replace(/[<>:"/\\|?*]/g, "_")
+      .replace(/[<>:"/\\|?*]/g, " ")
       .replace(/[\u0000-\u001f]/g, " ")
+      .replace(/\s+/g, " ")
       .trim()
       .replace(/^\.+|\.+$/g, "")
       .trim();
@@ -1678,7 +1816,9 @@ function setupIPC() {  // Получить сохранённые настрой
   }
 
 
-  // Открыть файл или папку средствами системы
+  // Открыть папку средствами системы.
+  // Для файла — открываем папку и выделяем его: кнопка «Открыть» после
+  // скачивания должна показывать, куда лёг трек, а не запускать плеер.
   ipcMain.handle("open-path", async (_event, target: string) => {
     try {
       const resolved =
@@ -1686,7 +1826,18 @@ function setupIPC() {  // Получить сохранённые настрой
           ? app.getPath("downloads")
           : target;
       if (resolved.includes(":") && !resolved.startsWith("http")) {
-        await shell.openPath(resolved);
+        let isFile = false;
+        try {
+          isFile = statSync(resolved).isFile();
+        } catch {
+          isFile = false;
+        }
+
+        if (isFile) {
+          shell.showItemInFolder(resolved);
+        } else {
+          await shell.openPath(resolved);
+        }
       } else {
         shell.showItemInFolder(resolved);
       }
@@ -1697,7 +1848,109 @@ function setupIPC() {  // Получить сохранённые настрой
       return { ok: false, error: message };
     }
   });
-  // Скачать трек в папку «Загрузки»
+  /**
+   * Путь к ffmpeg.
+   *
+   * Приложение не таскает его с собой, но без ffmpeg нельзя получить mp3
+   * из HLS-потока SoundCloud. Ищем в PATH и типовых местах установки.
+   */
+  function findFfmpeg(): string | null {
+    const isWin = process.platform === "win32";
+    const exeName = isWin ? "ffmpeg.exe" : "ffmpeg";
+
+    // 1. PATH.
+    const dirs = (process.env.PATH ?? "").split(path.delimiter).filter(Boolean);
+    for (const dir of dirs) {
+      const candidate = path.join(dir, exeName);
+      if (existsSync(candidate)) return candidate;
+    }
+
+    const candidates: string[] = [];
+
+    // 2. Рядом с приложением.
+    candidates.push(path.join(path.dirname(app.getPath("exe")), exeName));
+    candidates.push(path.join(process.resourcesPath ?? "", exeName));
+
+    // 3. WinGet: ссылка и распакованный пакет.
+    if (process.env.LOCALAPPDATA) {
+      const winget = path.join(
+        process.env.LOCALAPPDATA,
+        "Microsoft",
+        "WinGet"
+      );
+      candidates.push(path.join(winget, "Links", exeName));
+
+      const packages = path.join(winget, "Packages");
+      try {
+        for (const entry of readdirSync(packages)) {
+          if (!entry.toLowerCase().includes("ffmpeg")) continue;
+          const pkg = path.join(packages, entry);
+          for (const build of readdirSync(pkg)) {
+            candidates.push(path.join(pkg, build, "bin", exeName));
+          }
+        }
+      } catch {
+        // Папки может не быть — это нормально.
+      }
+    }
+
+    // 4. Chocolatey и ручная установка.
+    if (process.env.ProgramData) {
+      candidates.push(
+        path.join(process.env.ProgramData, "chocolatey", "bin", exeName)
+      );
+    }
+    candidates.push("C:\\ffmpeg\\bin\\ffmpeg.exe");
+
+    return candidates.find((p) => p && existsSync(p)) ?? null;
+  }
+
+  /** Перекодировать файл в mp3. Бросает ошибку, если ffmpeg не справился. */
+  function convertToMp3(input: string, output: string): Promise<void> {
+    const ffmpeg = findFfmpeg();
+    if (!ffmpeg) {
+      return Promise.reject(
+        new Error("Для сохранения в mp3 нужен ffmpeg — установите его и повторите")
+      );
+    }
+
+    return new Promise((resolve, reject) => {
+      const child = spawn(
+        ffmpeg,
+        [
+          "-hide_banner",
+          "-loglevel",
+          "error",
+          "-y",
+          "-i",
+          input,
+          "-vn",
+          "-codec:a",
+          "libmp3lame",
+          "-q:a",
+          "2",
+          output,
+        ],
+        { windowsHide: true }
+      );
+
+      let stderr = "";
+      child.stderr?.on("data", (chunk: Buffer) => {
+        stderr += chunk.toString();
+      });
+
+      child.on("error", (e) => reject(new Error(`ffmpeg: ${e.message}`)));
+      child.on("close", (code) => {
+        if (code === 0) resolve();
+        else {
+          const last = stderr.trim().split("\n").pop() ?? `код ${code}`;
+          reject(new Error(`Не удалось перекодировать в mp3: ${last}`));
+        }
+      });
+    });
+  }
+
+  // Скачать трек в папку «Загрузки» в формате mp3
   ipcMain.handle(
     "download-track",
     async (_event, trackId: number, title: string, artist: string) => {
@@ -1716,15 +1969,14 @@ function setupIPC() {  // Получить сохранённые настрой
 
       report("started", 0);
 
+      const tempPath = path.join(
+        os.tmpdir(),
+        `soundwave-${trackId}-${process.pid}.m4a`
+      );
+
       try {
         const source = await resolveDownloadSource(trackId);
-        const dir = app.getPath("downloads");
-        const target = uniqueFilePath(
-          dir,
-          `${safeFileName(artist)} - ${safeFileName(title)}.${source.extension}`
-        );
-
-        const handle = await fsPromises.open(target, "w");
+        const handle = await fsPromises.open(tempPath, "w");
         const totalParts = Math.max(source.parts.length, 1);
 
         try {
@@ -1749,9 +2001,13 @@ function setupIPC() {  // Получить сохранённые настрой
 
               const partPercent =
                 total > 0 ? Math.min(100, Math.floor((written * 100) / total)) : 0;
+              // Загрузка — первые 90%, остальное конвертация.
               report(
                 "progress",
-                Math.min(99, Math.floor((index * 100 + partPercent) / totalParts))
+                Math.min(
+                  90,
+                  Math.floor(((index * 100 + partPercent) / totalParts) * 0.9)
+                )
               );
             }
           }
@@ -1759,10 +2015,25 @@ function setupIPC() {  // Получить сохранённые настрой
           await handle.close();
         }
 
+        const dir = app.getPath("downloads");
+        const target = uniqueFilePath(
+          dir,
+          `${safeFileName(artist)} - ${safeFileName(title)}.mp3`
+        );
+
+        if (source.extension === "mp3") {
+          await fsPromises.rename(tempPath, target);
+        } else {
+          report("progress", 95);
+          await convertToMp3(tempPath, target);
+          await fsPromises.unlink(tempPath).catch(() => undefined);
+        }
+
         report("done", 100, { path: target });
         log.info("Трек скачан:", target);
         return { ok: true, path: target };
       } catch (e) {
+        await fsPromises.unlink(tempPath).catch(() => undefined);
         const message =
           e instanceof Error ? e.message : "Не удалось скачать трек";
         log.warn("Скачивание не удалось:", message);
@@ -2602,6 +2873,11 @@ if (!hasSingleInstanceLock) {
     // Локальный HTTP API для агентов. Порт по умолчанию 4783,
     // если занят — берётся следующий свободный.
     void startAgentApiIfEnabled();
+
+    // Access-токен SoundCloud живёт сутки — продлеваем заранее:
+    // сразу при запуске и дальше раз в 15 минут.
+    void refreshScSessionIfNeeded();
+    setInterval(() => void refreshScSessionIfNeeded(), 15 * 60_000);
 
     // Discord Rich Presence — если включён, подключаемся сразу.
     if (store.get("discordEnabled") !== false) {

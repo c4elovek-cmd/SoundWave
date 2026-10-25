@@ -10,7 +10,7 @@ import {
   MusicNotes,
   User,
   LinkSimple,
-} from "@phosphor-icons/react";
+} from "../../lib/icons";
 import { SCTrack } from "../../types/soundcloud";
 import { usePlayerStore } from "../../stores/playerStore";
 import { useAppStore } from "../../stores/appStore";

@@ -258,6 +258,13 @@ if (isExternalPage) {
         ipcRenderer.removeListener("window-maximized-changed", listener);
       };
     },
+    onWindowFocusChanged: (callback: (focused: boolean) => void) => {
+      const listener = (_event: unknown, value: boolean) => callback(value);
+      ipcRenderer.on("window-focus", listener);
+      return () => {
+        ipcRenderer.removeListener("window-focus", listener);
+      };
+    },
 
     // События от main-процесса
     onAuthSuccess: (callback: (cookies: string) => void) => {

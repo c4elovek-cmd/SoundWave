@@ -582,8 +582,12 @@ async fn import_cookies(
 }
 
 /// Восстановление сессии при запуске.
+///
+/// Access-токен SoundCloud живёт сутки. Если он истёк — пробуем продлить
+/// по refresh-токену; не вышло (сессию отозвали) — честно отвечаем
+/// «не залогинен», но cookies всё равно ставим: анонимный поиск работает.
 #[tauri::command]
-fn restore_session(state: State<'_, AppState>) -> Value {
+async fn restore_session(state: State<'_, AppState>) -> Result<Value, String> {
     let config = config::load();
     let header = config
         .get("scCookies")
@@ -592,7 +596,7 @@ fn restore_session(state: State<'_, AppState>) -> Value {
         .to_string();
 
     if header.is_empty() {
-        return serde_json::json!({ "loggedIn": false, "cookies": "" });
+        return Ok(serde_json::json!({ "loggedIn": false, "cookies": "" }));
     }
 
     let pairs = session::header_to_pairs(&header);
@@ -600,7 +604,30 @@ fn restore_session(state: State<'_, AppState>) -> Value {
 
     state.sc.set_session(header.clone(), token);
 
-    serde_json::json!({ "loggedIn": true, "cookies": header })
+    if let Some(token) = session::oauth_token_from_header(&header) {
+        if session::token_expired(&token) {
+            match state.sc.refresh_session().await {
+                Ok(new_header) => {
+                    let _ =
+                        config::set_value("scCookies", Value::String(new_header.clone()));
+                    log::info!("Сессия SoundCloud обновлена по refresh-токену");
+                    return Ok(serde_json::json!({
+                        "loggedIn": true,
+                        "cookies": new_header
+                    }));
+                }
+                Err(e) => {
+                    log::warn!("Не удалось обновить сессию SoundCloud: {e}");
+                    return Ok(serde_json::json!({
+                        "loggedIn": false,
+                        "cookies": header
+                    }));
+                }
+            }
+        }
+    }
+
+    Ok(serde_json::json!({ "loggedIn": true, "cookies": header }))
 }
 
 /// Есть ли активная сессия SoundCloud.
@@ -1231,7 +1258,11 @@ async fn install_update(app: AppHandle) -> Value {
     }
 }
 
-/// Открыть файл или папку средствами системы.
+/// Открыть папку средствами системы.
+///
+/// Если передан файл — открываем его папку и выделяем сам файл, а не
+/// запускаем его в плеере. Это ожидаемое поведение кнопки «Открыть»
+/// после скачивания: человек хочет увидеть, куда лёг трек.
 /// Если передан "downloads" — открывает системную папку «Загрузки».
 #[tauri::command]
 fn open_path(app: AppHandle, path: String) -> Result<bool, String> {
@@ -1244,18 +1275,35 @@ fn open_path(app: AppHandle, path: String) -> Result<bool, String> {
         path
     };
 
+    let is_file = std::path::Path::new(&target).is_file();
+
     #[cfg(windows)]
     {
-        // start открывает файл или папку в программе по умолчанию.
-        std::process::Command::new("cmd")
-            .args(["/C", "start", "", &target])
-            .spawn()
-            .map_err(|e| format!("Не удалось открыть: {e}"))?;
+        if is_file {
+            // explorer /select, — открывает папку и выделяет файл.
+            // Строку собираем вручную (raw_arg): explorer ждёт запятую,
+            // приклеенную к пути в кавычках, иначе разбирает аргументы
+            // как два отдельных и молча завершается.
+            #[cfg(windows)]
+            use std::os::windows::process::CommandExt;
+
+            std::process::Command::new("explorer")
+                .raw_arg(format!("/select,\"{target}\""))
+                .spawn()
+                .map_err(|e| format!("Не удалось показать файл: {e}"))?;
+        } else {
+            // start открывает папку в проводнике.
+            std::process::Command::new("cmd")
+                .args(["/C", "start", "", &target])
+                .spawn()
+                .map_err(|e| format!("Не удалось открыть: {e}"))?;
+        }
         Ok(true)
     }
 
     #[cfg(not(windows))]
     {
+        let _ = is_file;
         std::process::Command::new("xdg-open")
             .arg(&target)
             .spawn()
@@ -1266,17 +1314,22 @@ fn open_path(app: AppHandle, path: String) -> Result<bool, String> {
 // --- Скачивание -----------------------------------------------------------
 
 /// Имя файла без запрещённых символов Windows.
+///
+/// Запрещённые символы заменяем пробелом, а не подчёркиванием: имена
+/// треков часто содержат `/` или `:`, и `_` в названии файла выглядит
+/// как мусор. Повторные пробелы схлопываем.
 fn safe_file_name(name: &str) -> String {
     let cleaned: String = name
         .chars()
         .map(|c| match c {
-            '<' | '>' | ':' | '"' | '/' | '\\' | '|' | '?' | '*' => '_',
+            '<' | '>' | ':' | '"' | '/' | '\\' | '|' | '?' | '*' => ' ',
             c if c.is_control() => ' ',
             c => c,
         })
         .collect();
 
-    let trimmed = cleaned.trim().trim_matches('.').trim();
+    let collapsed = cleaned.split_whitespace().collect::<Vec<_>>().join(" ");
+    let trimmed = collapsed.trim().trim_matches('.').trim();
     if trimmed.is_empty() {
         "track".to_string()
     } else {
@@ -1330,10 +1383,92 @@ fn report_download(app: &AppHandle, track_id: u64, state: &str, percent: u64, ex
     let _ = app.emit("download-progress", payload);
 }
 
-/// Скачать трек в папку «Загрузки».
+/// Ищет ffmpeg: сначала в PATH, затем в типовых местах установки.
 ///
-/// Берём обычный mp3 (progressive), качаем файл потоком и сообщаем
-/// интерфейсу о прогрессе событием `download-progress`.
+/// Приложение не таскает ffmpeg с собой (это десятки мегабайт), но
+/// конвертация HLS-потока в mp3 без него невозможна.
+fn find_ffmpeg() -> Option<std::path::PathBuf> {
+    use std::path::PathBuf;
+
+    // 1. PATH — самый частый случай.
+    if std::process::Command::new("ffmpeg")
+        .arg("-version")
+        .stdout(std::process::Stdio::null())
+        .stderr(std::process::Stdio::null())
+        .status()
+        .map(|s| s.success())
+        .unwrap_or(false)
+    {
+        return Some(PathBuf::from("ffmpeg"));
+    }
+
+    let mut candidates: Vec<PathBuf> = Vec::new();
+
+    // 2. Рядом с приложением — если пользователь положил ffmpeg сам.
+    if let Ok(exe) = std::env::current_exe() {
+        if let Some(dir) = exe.parent() {
+            candidates.push(dir.join("ffmpeg.exe"));
+            candidates.push(dir.join("bin").join("ffmpeg.exe"));
+        }
+    }
+
+    // 3. WinGet: ссылка в Links и распакованный пакет.
+    if let Ok(local) = std::env::var("LOCALAPPDATA") {
+        let winget = PathBuf::from(&local).join("Microsoft").join("WinGet");
+        candidates.push(winget.join("Links").join("ffmpeg.exe"));
+
+        let packages = winget.join("Packages");
+        if let Ok(entries) = std::fs::read_dir(&packages) {
+            for entry in entries.flatten() {
+                let name = entry.file_name().to_string_lossy().to_string();
+                if !name.to_lowercase().contains("ffmpeg") {
+                    continue;
+                }
+                // Внутри пакета: ffmpeg-<версия>-full_build\bin\ffmpeg.exe
+                if let Ok(inner) = std::fs::read_dir(entry.path()) {
+                    for build in inner.flatten() {
+                        candidates.push(build.path().join("bin").join("ffmpeg.exe"));
+                    }
+                }
+            }
+        }
+    }
+
+    // 4. Chocolatey и ручная установка.
+    if let Ok(program_data) = std::env::var("ProgramData") {
+        candidates.push(
+            PathBuf::from(program_data)
+                .join("chocolatey")
+                .join("bin")
+                .join("ffmpeg.exe"),
+        );
+    }
+    candidates.push(PathBuf::from(r"C:\ffmpeg\bin\ffmpeg.exe"));
+
+    candidates.into_iter().find(|p| p.is_file())
+}
+
+/// Запускает ffmpeg без мелькающего окна консоли.
+fn ffmpeg_command(exe: &std::path::Path) -> tokio::process::Command {
+    #[allow(unused_mut)]
+    let mut command = tokio::process::Command::new(exe);
+
+    #[cfg(windows)]
+    {
+        // У tokio-команды этот метод свой, отдельный трейт не нужен.
+        const CREATE_NO_WINDOW: u32 = 0x0800_0000;
+        command.creation_flags(CREATE_NO_WINDOW);
+    }
+
+    command
+}
+
+/// Скачать трек в папку «Загрузки» в формате mp3.
+///
+/// SoundCloud почти всегда отдаёт HLS с fMP4, а не готовый mp3, поэтому
+/// качаем поток во временный файл и перекодируем его в mp3 через ffmpeg.
+/// Если ffmpeg не найден — честно сообщаем об этом, а не кладём .m4a
+/// с расширением .mp3.
 #[tauri::command]
 async fn download_track(
     app: AppHandle,
@@ -1357,19 +1492,13 @@ async fn download_track(
         e
     })?;
 
-    let dir = app
-        .path()
-        .download_dir()
-        .unwrap_or_else(|_| std::path::PathBuf::from("."));
-    let file_name = format!(
-        "{} - {}.{}",
-        safe_file_name(&artist),
-        safe_file_name(&title),
-        stream.extension
-    );
-    let path = unique_path(&dir, &file_name);
+    // Качаем во временный файл: итоговый путь занимаем только готовым mp3,
+    // чтобы в «Загрузках» не появлялись недокачанные обрывки.
+    let temp_dir = std::env::temp_dir();
+    let temp_name = format!("soundwave-{track_id}-{}.{}", std::process::id(), stream.extension);
+    let temp_path = temp_dir.join(temp_name);
 
-    let mut file = tokio::fs::File::create(&path).await.map_err(|e| {
+    let mut file = tokio::fs::File::create(&temp_path).await.map_err(|e| {
         let message = format!("Не удалось создать файл: {e}");
         report_download(
             &app,
@@ -1386,20 +1515,25 @@ async fn download_track(
 
     // Части идут по порядку: у mp3 она одна, у HLS — init и сегменты.
     for (index, part_url) in stream.parts.iter().enumerate() {
-        let mut response = client.get(part_url).send().await.map_err(|e| {
-            let message = format!("Не удалось скачать трек: {e}");
-            report_download(
-                &app,
-                track_id,
-                "error",
-                0,
-                serde_json::json!({ "error": message }),
-            );
-            message
-        })?;
+        let mut response = match client.get(part_url).send().await {
+            Ok(r) => r,
+            Err(e) => {
+                let message = format!("Не удалось скачать трек: {e}");
+                let _ = tokio::fs::remove_file(&temp_path).await;
+                report_download(
+                    &app,
+                    track_id,
+                    "error",
+                    0,
+                    serde_json::json!({ "error": message }),
+                );
+                return Err(message);
+            }
+        };
 
         if !response.status().is_success() {
             let message = format!("Сервер отдал ошибку {}", response.status());
+            let _ = tokio::fs::remove_file(&temp_path).await;
             report_download(
                 &app,
                 track_id,
@@ -1419,6 +1553,7 @@ async fn download_track(
                 Ok(None) => break,
                 Err(e) => {
                     let message = format!("Ошибка загрузки: {e}");
+                    let _ = tokio::fs::remove_file(&temp_path).await;
                     report_download(
                         &app,
                         track_id,
@@ -1432,6 +1567,7 @@ async fn download_track(
 
             if let Err(e) = file.write_all(&chunk).await {
                 let message = format!("Не удалось записать файл: {e}");
+                let _ = tokio::fs::remove_file(&temp_path).await;
                 report_download(
                     &app,
                     track_id,
@@ -1449,15 +1585,106 @@ async fn download_track(
             } else {
                 0
             };
-            let percent = ((index as u64 * 100 + part_percent) / total_parts as u64).min(99);
+            // Загрузка занимает первые 90%, остальное — конвертация.
+            let percent = ((index as u64 * 100 + part_percent) / total_parts as u64 * 90 / 100)
+                .min(90);
             report_download(&app, track_id, "progress", percent, Value::Null);
         }
     }
 
     let _ = file.flush().await;
     let _ = file.sync_all().await;
+    drop(file);
 
+    let dir = app
+        .path()
+        .download_dir()
+        .unwrap_or_else(|_| std::path::PathBuf::from("."));
+    let file_name = format!(
+        "{} - {}.mp3",
+        safe_file_name(&artist),
+        safe_file_name(&title)
+    );
+    let path = unique_path(&dir, &file_name);
     let path_text = path.to_string_lossy().to_string();
+
+    if stream.extension == "mp3" {
+        // Уже mp3 — просто переносим на место.
+        if let Err(e) = tokio::fs::rename(&temp_path, &path).await {
+            // Между дисками rename не работает — копируем.
+            if let Err(copy_error) = tokio::fs::copy(&temp_path, &path).await {
+                let _ = tokio::fs::remove_file(&temp_path).await;
+                let message = format!("Не удалось сохранить файл: {e} / {copy_error}");
+                report_download(
+                    &app,
+                    track_id,
+                    "error",
+                    0,
+                    serde_json::json!({ "error": message }),
+                );
+                return Err(message);
+            }
+            let _ = tokio::fs::remove_file(&temp_path).await;
+        }
+    } else {
+        let Some(ffmpeg) = find_ffmpeg() else {
+            let _ = tokio::fs::remove_file(&temp_path).await;
+            let message = "Для сохранения в mp3 нужен ffmpeg — установите его и повторите"
+                .to_string();
+            report_download(
+                &app,
+                track_id,
+                "error",
+                0,
+                serde_json::json!({ "error": message }),
+            );
+            return Err(message);
+        };
+
+        report_download(&app, track_id, "progress", 95, Value::Null);
+
+        let output = ffmpeg_command(&ffmpeg)
+            .args(["-hide_banner", "-loglevel", "error", "-y"])
+            .arg("-i")
+            .arg(&temp_path)
+            .args(["-vn", "-codec:a", "libmp3lame", "-q:a", "2"])
+            .arg(&path)
+            .output()
+            .await;
+
+        let _ = tokio::fs::remove_file(&temp_path).await;
+
+        match output {
+            Ok(result) if result.status.success() => {}
+            Ok(result) => {
+                let _ = tokio::fs::remove_file(&path).await;
+                let details = String::from_utf8_lossy(&result.stderr);
+                let details = details.lines().last().unwrap_or("неизвестная ошибка");
+                let message = format!("Не удалось перекодировать в mp3: {details}");
+                report_download(
+                    &app,
+                    track_id,
+                    "error",
+                    0,
+                    serde_json::json!({ "error": message }),
+                );
+                return Err(message);
+            }
+            Err(e) => {
+                let _ = tokio::fs::remove_file(&path).await;
+                let message = format!("Не удалось запустить ffmpeg: {e}");
+                report_download(
+                    &app,
+                    track_id,
+                    "error",
+                    0,
+                    serde_json::json!({ "error": message }),
+                );
+                return Err(message);
+            }
+        }
+    }
+
     report_download(
         &app,
         track_id,
@@ -1599,6 +1826,40 @@ pub fn run() {
                 }
             }
 
+            // Access-токен SoundCloud живёт сутки — продлеваем заранее,
+            // раз в 15 минут проверяя срок, чтобы вход не отваливался.
+            let refresh_app = app.handle().clone();
+            tauri::async_runtime::spawn(async move {
+                loop {
+                    tokio::time::sleep(std::time::Duration::from_secs(900)).await;
+
+                    let state = refresh_app.state::<AppState>();
+                    let (_, token) = state.sc.session();
+                    let Some(token) = token else { continue };
+
+                    let needs_refresh = match session::token_expires_in(&token) {
+                        Some(left) => left < 1800,
+                        None => false,
+                    };
+                    if !needs_refresh {
+                        continue;
+                    }
+
+                    match state.sc.refresh_session().await {
+                        Ok(header) => {
+                            let _ = config::set_value(
+                                "scCookies",
+                                Value::String(header),
+                            );
+                            log::info!("Сессия SoundCloud продлена фоновым обновлением");
+                        }
+                        Err(e) => {
+                            log::warn!("Фоновое обновление сессии не удалось: {e}");
+                        }
+                    }
+                }
+            });
+
             Ok(())
         })
         .invoke_handler(tauri::generate_handler![
@@ -1660,6 +1921,16 @@ pub fn run() {
                 return;
             }
 
+            // Скрытое или свёрнутое окно не должно крутить анимации и
+            // перерисовывать интерфейс — сообщаем фронтенду о состоянии.
+            // Окно без фокуса тоже считаем фоном: пользователь на него
+            // не смотрит, а анимации всё равно жгут CPU.
+            if window.label() == "main" {
+                if let WindowEvent::Focused(focused) = event {
+                    let _ = window.emit("window-focus", *focused);
+                }
+            }
+
             if let WindowEvent::CloseRequested { api, .. } = event {
                 if window.label() != "main" {
                     return;
@@ -1683,4 +1954,39 @@ pub fn run() {
         })
         .run(tauri::generate_context!())
         .expect("не удалось запустить приложение");
+}
+
+// --- Тесты ----------------------------------------------------------------
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn replaces_forbidden_chars_with_space() {
+        // Слэш и двоеточие — частые гости в названиях треков.
+        assert_eq!(safe_file_name("AC/DC - Back:In Black"), "AC DC - Back In Black");
+        assert_eq!(safe_file_name("Что?"), "Что");
+    }
+
+    #[test]
+    fn keeps_names_without_underscores() {
+        // Раньше запрещённые символы превращались в «_», и имя файла
+        // выглядело как мусор.
+        let name = safe_file_name("Стас Гребешок - с забитой глоткой");
+        assert_eq!(name, "Стас Гребешок - с забитой глоткой");
+        assert!(!name.contains('_'));
+    }
+
+    #[test]
+    fn falls_back_to_track_for_empty_names() {
+        assert_eq!(safe_file_name("   "), "track");
+        assert_eq!(safe_file_name("..."), "track");
+        assert_eq!(safe_file_name("///"), "track");
+    }
+
+    #[test]
+    fn collapses_repeated_spaces() {
+        assert_eq!(safe_file_name("a  /  b"), "a b");
+    }
 }

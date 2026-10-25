@@ -7,7 +7,7 @@ import {
   SignIn,
   ThumbsDown,
   Waveform,
-} from "@phosphor-icons/react";
+} from "../lib/icons";
 import { useAppStore } from "../stores/appStore";
 import { usePlayerStore } from "../stores/playerStore";
 import { useWaveStore } from "../stores/waveStore";

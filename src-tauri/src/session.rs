@@ -181,6 +181,61 @@ pub fn header_to_pairs(header: &str) -> Vec<CookiePair> {
         .collect()
 }
 
+/// Значение cookie с этим именем из заголовка.
+pub fn cookie_value(header: &str, name: &str) -> Option<String> {
+    header_to_pairs(header)
+        .into_iter()
+        .find(|(n, _)| n == name)
+        .map(|(_, value)| value)
+}
+
+/// Заголовок с заменённой (или добавленной в конец) cookie.
+pub fn with_cookie(header: &str, name: &str, value: &str) -> String {
+    let mut pairs: Vec<CookiePair> = header_to_pairs(header)
+        .into_iter()
+        .filter(|(n, _)| n != name)
+        .collect();
+    pairs.push((name.to_string(), value.to_string()));
+    build_header(&pairs)
+}
+
+/// Раскодирует payload JWT — часть между двумя точками.
+fn jwt_payload(token: &str) -> Option<Value> {
+    use base64::Engine;
+    let payload = token.split('.').nth(1)?;
+    let bytes = base64::engine::general_purpose::URL_SAFE_NO_PAD
+        .decode(payload)
+        .or_else(|_| base64::engine::general_purpose::URL_SAFE.decode(payload))
+        .ok()?;
+    serde_json::from_slice(&bytes).ok()
+}
+
+fn now_secs() -> i64 {
+    std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| d.as_secs() as i64)
+        .unwrap_or(0)
+}
+
+/// Сколько секунд осталось у access-токена. None — не JWT или нет exp.
+pub fn token_expires_in(token: &str) -> Option<i64> {
+    let exp = jwt_payload(token)?.get("exp")?.as_i64()?;
+    Some(exp - now_secs())
+}
+
+/// Истёк ли access-токен (с запасом в минуту). Не-JWT считаем живым.
+pub fn token_expired(token: &str) -> bool {
+    matches!(token_expires_in(token), Some(secs) if secs < 60)
+}
+
+/// client_id из claims токена — нужен для обновления сессии.
+pub fn token_client_id(token: &str) -> Option<String> {
+    jwt_payload(token)?
+        .get("client_id")?
+        .as_str()
+        .map(String::from)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -218,5 +273,37 @@ mod tests {
     fn ignores_garbage() {
         assert!(parse_cookie_input("   ").is_none());
         assert!(parse_cookie_input("просто текст").is_none());
+    }
+
+    #[test]
+    fn jwt_helpers() {
+        use base64::Engine;
+        // payload: {"exp":<сейчас-10>,"client_id":"abc"}
+        let payload = format!(
+            "{{\"exp\":{},\"client_id\":\"abc\"}}",
+            now_secs() - 10
+        );
+        let encoded = base64::engine::general_purpose::URL_SAFE_NO_PAD.encode(payload);
+        let token = format!("h.{encoded}.s");
+
+        assert!(token_expired(&token), "просроченный токен распознан");
+        assert!(!token_expired("not-a-jwt"), "не-JJWT считается живым");
+        assert_eq!(token_client_id(&token).as_deref(), Some("abc"));
+        assert!(token_expires_in(&token).unwrap() <= -10);
+    }
+
+    #[test]
+    fn cookie_replace() {
+        let header = "a=1; oauth_token=old; b=2";
+        assert_eq!(cookie_value(header, "oauth_token").as_deref(), Some("old"));
+        assert_eq!(cookie_value(header, "nope"), None);
+
+        let replaced = with_cookie(header, "oauth_token", "new");
+        assert_eq!(cookie_value(&replaced, "oauth_token").as_deref(), Some("new"));
+        assert_eq!(cookie_value(&replaced, "a").as_deref(), Some("1"));
+        assert_eq!(cookie_value(&replaced, "b").as_deref(), Some("2"));
+
+        let added = with_cookie(header, "fresh", "yes");
+        assert_eq!(cookie_value(&added, "fresh").as_deref(), Some("yes"));
     }
 }

@@ -6,7 +6,7 @@ import {
   WarningCircle,
   Cookie,
   ArrowSquareOut,
-} from "@phosphor-icons/react";
+} from "../lib/icons";
 import "./Pages.css";
 
 /**

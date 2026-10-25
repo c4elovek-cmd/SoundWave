@@ -5,7 +5,8 @@
   z-index: 1000;
   min-width: 230px;
   padding: 6px;
-  background: var(--bg-elevated);
+  /* Непрозрачный фон: в глассморфизме --bg-elevated с альфой. */
+  background: var(--bg-popover, var(--bg-elevated));
   border: 1px solid var(--border);
   border-radius: var(--radius-md);
   box-shadow: 0 12px 32px rgba(0, 0, 0, 0.45), 0 2px 8px rgba(0, 0, 0, 0.3);
@@ -43,7 +44,7 @@
   transition: background var(--transition-base);
 }
 
-.track-menu-item svg {
+.track-menu-item .material-symbols-rounded {
   color: var(--text-secondary);
   flex: none;
 }
@@ -54,8 +55,8 @@
   outline: none;
 }
 
-.track-menu-item:hover:not(:disabled) svg,
-.track-menu-item:focus-visible:not(:disabled) svg {
+.track-menu-item:hover:not(:disabled) .material-symbols-rounded,
+.track-menu-item:focus-visible:not(:disabled) .material-symbols-rounded {
   color: var(--text-primary);
 }
 

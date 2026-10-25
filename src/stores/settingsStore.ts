@@ -2,7 +2,7 @@ import { create } from "zustand";
 
 export type Density = "comfortable" | "compact";
 export type RepeatSetting = "off" | "all" | "one";
-export type UiStyle = "classic" | "minimal" | "contrast" | "glass" | "threeD" | "bento";
+export type UiStyle = "classic" | "minimal" | "contrast" | "glass" | "threeD" | "bento" | "md3";
 
 export interface CustomFontInfo {
   /** Уникальный id файла */

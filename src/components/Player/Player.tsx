@@ -18,7 +18,7 @@ import {
   ThumbsDown,
   DownloadSimple,
   Check,
-} from "@phosphor-icons/react";
+} from "../../lib/icons";
 import { usePlayerStore } from "../../stores/playerStore";
 import { useAppStore } from "../../stores/appStore";
 import { useWaveStore } from "../../stores/waveStore";

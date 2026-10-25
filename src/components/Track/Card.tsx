@@ -1,4 +1,4 @@
-import { Play, MusicNotes } from "@phosphor-icons/react";
+import { Play, MusicNotes } from "../../lib/icons";
 import "./TrackRow.css";
 
 interface Props {

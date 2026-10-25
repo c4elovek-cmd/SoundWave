@@ -1,5 +1,5 @@
 import { useEffect, useState } from "react";
-import { Heart, CloudArrowUp, MusicNotes, Play } from "@phosphor-icons/react";
+import { Heart, CloudArrowUp, MusicNotes, Play } from "../lib/icons";
 import { useAppStore } from "../stores/appStore";
 import { usePlayerStore } from "../stores/playerStore";
 import { scApi } from "../lib/soundcloud-api";

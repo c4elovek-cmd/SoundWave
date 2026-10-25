@@ -15,7 +15,7 @@ import {
   TextAa,
   Trash,
   X,
-} from "@phosphor-icons/react";
+} from "../../lib/icons";
 import { useAppStore } from "../../stores/appStore";
 import { usePlayerStore } from "../../stores/playerStore";
 import { useSettingsStore, UiStyle } from "../../stores/settingsStore";
@@ -45,6 +45,7 @@ const STYLES: {
   { id: "glass", label: "Глассморфизм", hint: "Полупрозрачные панели" },
   { id: "threeD", label: "3D", hint: "Объём, тени и градиенты" },
   { id: "bento", label: "Bento Grid", hint: "Модульная сетка плитками" },
+  { id: "md3", label: "Material Design 3", hint: "Тональные поверхности и мягкие радиусы" },
 ];
 
 const TABS: { id: TabId; label: string; icon: typeof Gear }[] = [

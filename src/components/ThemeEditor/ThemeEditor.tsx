@@ -1,5 +1,5 @@
 import { useEffect, useState } from "react";
-import { FloppyDisk, Trash, X } from "@phosphor-icons/react";
+import { FloppyDisk, Trash, X } from "../../lib/icons";
 import {
   ACCENT_PRESETS,
   CustomTheme,

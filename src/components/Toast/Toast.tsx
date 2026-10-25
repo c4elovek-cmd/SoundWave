@@ -1,5 +1,5 @@
 import { useEffect } from "react";
-import { X, CheckCircle, WarningCircle, Info } from "@phosphor-icons/react";
+import { X, CheckCircle, WarningCircle, Info } from "../../lib/icons";
 import { useToastStore } from "../../stores/toastStore";
 import "./Toast.css";
 

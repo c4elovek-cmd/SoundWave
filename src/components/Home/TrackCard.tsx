@@ -1,5 +1,5 @@
 import { useState } from "react";
-import { Play, MusicNotes } from "@phosphor-icons/react";
+import { Play, MusicNotes } from "../../lib/icons";
 import { SCTrack } from "../../types/soundcloud";
 import { usePlayerStore } from "../../stores/playerStore";
 import { logAction } from "../../lib/actionLog";

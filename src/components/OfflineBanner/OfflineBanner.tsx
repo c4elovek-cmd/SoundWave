@@ -5,7 +5,7 @@ import {
   ArrowClockwise,
   Folder,
   X,
-} from "@phosphor-icons/react";
+} from "../../lib/icons";
 import { useNetworkStore } from "../../stores/networkStore";
 import { usePlayerStore } from "../../stores/playerStore";
 import { logAction } from "../../lib/actionLog";

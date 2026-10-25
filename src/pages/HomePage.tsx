@@ -1,5 +1,5 @@
 import { useEffect } from "react";
-import { MusicNotes, ArrowClockwise } from "@phosphor-icons/react";
+import { MusicNotes, ArrowClockwise } from "../lib/icons";
 import { useAppStore } from "../stores/appStore";
 import { usePlayerStore } from "../stores/playerStore";
 import { logAction } from "../lib/actionLog";

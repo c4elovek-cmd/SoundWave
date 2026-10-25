@@ -1,5 +1,5 @@
 import { useEffect, useState } from "react";
-import { Globe, ShieldCheck, MusicNotes, Cookie, SignOut } from "@phosphor-icons/react";
+import { Globe, ShieldCheck, MusicNotes, Cookie, SignOut } from "../lib/icons";
 import "./Pages.css";
 
 /**

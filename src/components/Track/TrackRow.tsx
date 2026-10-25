@@ -1,4 +1,4 @@
-import { Play, MusicNotes, Heart, DownloadSimple, Check } from "@phosphor-icons/react";
+import { Play, MusicNotes, Heart, DownloadSimple, Check } from "../../lib/icons";
 import { SCTrack } from "../../types/soundcloud";
 import { useEffect, useState } from "react";
 import { usePlayerStore } from "../../stores/playerStore";

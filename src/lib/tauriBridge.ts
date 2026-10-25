@@ -350,6 +350,9 @@ export function createTauriBridge(): Window["electronAPI"] {
     windowClose: () => invoke<boolean>("window_close"),
     onWindowMaximizedChanged: (callback: (value: boolean) => void) =>
       subscribe<boolean>("window-maximized-changed", callback),
+    /** Окно получило или потеряло фокус — интерфейс ставит анимации на паузу. */
+    onWindowFocusChanged: (callback: (focused: boolean) => void) =>
+      subscribe<boolean>("window-focus", callback),
 
     // --- События от бэкенда ---
     onAuthSuccess: (callback: (cookies: string) => void) =>

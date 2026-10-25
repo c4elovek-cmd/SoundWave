@@ -28,7 +28,9 @@
   width: min(880px, 100%);
   max-height: 100%;
   border-radius: var(--radius-lg);
-  background: var(--bg-base);
+  /* Непрозрачный фон: в глассморфизме --bg-base с альфой, и под панелью
+     просвечивали заголовки страницы и списки треков. */
+  background: var(--bg-popover, var(--bg-base));
   border: 1px solid var(--border-subtle);
   box-shadow: var(--shadow-lg);
   overflow: hidden;
@@ -102,7 +104,7 @@
   color: var(--text-primary);
 }
 
-.settings-tabs button.active svg {
+.settings-tabs button.active .material-symbols-rounded {
   color: var(--accent);
 }
 
@@ -439,6 +441,22 @@
 .settings-style-preview.bento span {
   background: #2a2a2a;
   border-radius: 5px;
+}
+
+.settings-style-preview.md3 {
+  background: #141312;
+}
+
+.settings-style-preview.md3 span {
+  border-radius: 9999px;
+}
+
+.settings-style-preview.md3 span:nth-child(2) {
+  background: #201f1d;
+}
+
+.settings-style-preview.md3 span:nth-child(3) {
+  background: #322f2c;
 }
 
 .settings-style-name {

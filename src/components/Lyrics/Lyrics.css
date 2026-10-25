@@ -288,7 +288,7 @@
   text-align: center;
 }
 
-.lyrics-status svg {
+.lyrics-status .material-symbols-rounded {
   color: var(--text-disabled);
 }
 

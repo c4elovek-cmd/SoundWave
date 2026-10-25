@@ -1,0 +1,40 @@
+/* Значки Material Symbols Rounded: базовая настройка поверх шрифта.
+   Сам шрифт подключается в main.tsx (material-symbols/rounded.css).
+
+   Мигание лигатур закрывает font-display: block в @font-face пакета:
+   браузер держит место пустым, пока шрифт не загрузится, и только потом
+   рисует значок. Своё скрытие через opacity здесь не нужно — если шрифт
+   почему-то не загрузится, значки иначе остались бы невидимыми навсегда. */
+
+.material-symbols-rounded {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  flex-shrink: 0;
+  line-height: 1;
+  vertical-align: middle;
+  user-select: none;
+  white-space: nowrap;
+  letter-spacing: normal;
+  text-transform: none;
+  direction: ltr;
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
+  text-rendering: optimizeLegibility;
+}
+
+/* Спиннер (progress_activity) крутится сам. */
+@keyframes ms-spin {
+  to {
+    transform: rotate(360deg);
+  }
+}
+
+.material-symbols-rounded.ms-spin {
+  animation: ms-spin 1s linear infinite;
+}
+
+:root.no-animations .material-symbols-rounded.ms-spin,
+.app-hidden .material-symbols-rounded.ms-spin {
+  animation: none;
+}

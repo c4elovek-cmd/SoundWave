@@ -6,6 +6,8 @@
   --bg-base: #121212;
   --bg-surface: #181818;
   --bg-elevated: #232323;
+  /* Плотный фон всплывающих слоёв: меню, поповеры, тосты. */
+  --bg-popover: #232323;
   --bg-hover: #282828;
   --bg-active: #333333;
   --bg-scrollbar: #404040;
@@ -46,6 +48,7 @@
   --bg-base: #fafafa;
   --bg-surface: #ffffff;
   --bg-elevated: #f5f5f5;
+  --bg-popover: #f5f5f5;
   --bg-hover: #ededed;
   --bg-active: #e0e0e0;
   --bg-scrollbar: #c0c0c0;
@@ -74,6 +77,7 @@
   --bg-base: #0f0a1a;
   --bg-surface: #181022;
   --bg-elevated: #231538;
+  --bg-popover: #231538;
   --bg-hover: #2d1c46;
   --bg-active: #3d2660;
   --bg-scrollbar: #4d3070;
@@ -102,6 +106,7 @@
   --bg-base: #0a1410;
   --bg-surface: #0f1a14;
   --bg-elevated: #15241c;
+  --bg-popover: #15241c;
   --bg-hover: #1a2e24;
   --bg-active: #224035;
   --bg-scrollbar: #2d5040;

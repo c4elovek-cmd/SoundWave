@@ -44,6 +44,13 @@ button {
   animation: none !important;
 }
 
+/* Окно скрыто или в фоне — анимации на паузе, CPU не тратится. */
+.app-hidden *,
+.app-hidden *::before,
+.app-hidden *::after {
+  animation-play-state: paused !important;
+}
+
 /* Компактная плотность интерфейса */
 .density-compact {
   --player-height: 70px;

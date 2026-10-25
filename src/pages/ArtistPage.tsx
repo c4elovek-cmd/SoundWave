@@ -1,5 +1,5 @@
 import { useEffect, useState } from "react";
-import { MusicNotes, ArrowSquareOut } from "@phosphor-icons/react";
+import { MusicNotes, ArrowSquareOut } from "../lib/icons";
 import { scApi } from "../lib/soundcloud-api";
 import { errorText } from "../lib/errorText";
 import { useAppStore } from "../stores/appStore";

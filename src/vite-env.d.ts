@@ -101,6 +101,8 @@ declare global {
       windowIsMaximized: () => Promise<boolean>;
       windowClose: () => Promise<boolean>;
       onWindowMaximizedChanged: (callback: (value: boolean) => void) => () => void;
+      /** Окно получило или потеряло фокус — интерфейс ставит анимации на паузу. */
+      onWindowFocusChanged?: (callback: (focused: boolean) => void) => () => void;
       listCustomFonts: () => Promise<
         {
           id: string;

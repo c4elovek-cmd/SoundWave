@@ -895,7 +895,8 @@ mod tests {
 
     #[test]
     fn normalizes_text() {
-        assert_eq!(normalize_text("I WANT (Original Song)"), "i want original song");
+        // Скобочные приписки вырезаются: "(Original Song)" не мешает поиску.
+        assert_eq!(normalize_text("I WANT (Original Song)"), "i want");
         assert_eq!(normalize_text("Don't Stop Me Now!"), "don t stop me now");
     }
 

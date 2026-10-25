@@ -21,7 +21,7 @@
   padding: 10px 12px;
   border: 1px solid var(--border);
   border-radius: var(--radius-md);
-  background: var(--bg-elevated);
+  background: var(--bg-popover, var(--bg-elevated));
   box-shadow: var(--shadow-lg);
   animation: toast-in 180ms ease-out;
 }

@@ -7,7 +7,7 @@ import {
   X,
   SignIn,
   Trash,
-} from "@phosphor-icons/react";
+} from "./lib/icons";
 import Sidebar from "./components/Sidebar/Sidebar";
 import TitleBar from "./components/TitleBar/TitleBar";
 import ToastHost from "./components/Toast/Toast";
@@ -151,6 +151,31 @@ export default function App() {
     void syncCustomFonts().then((fonts) =>
       useSettingsStore.getState().setCustomFonts(fonts)
     );
+  }, []);
+
+  // Скрытое окно не тратит CPU: класс app-hidden ставит все CSS-анимации
+  // на паузу, а плеер обновляет позицию редко (см. playerStore).
+  // document.hidden в WebView2 не всегда переключается при сворачивании,
+  // поэтому дополнительно слушаем фокус окна от бэкенда.
+  useEffect(() => {
+    let unfocused = false;
+
+    const apply = () => {
+      const hidden = document.hidden || unfocused;
+      document.documentElement.classList.toggle("app-hidden", hidden);
+    };
+
+    const off = window.electronAPI?.onWindowFocusChanged?.((focused) => {
+      unfocused = !focused;
+      apply();
+    });
+
+    apply();
+    document.addEventListener("visibilitychange", apply);
+    return () => {
+      off?.();
+      document.removeEventListener("visibilitychange", apply);
+    };
   }, []);
 
   // Discord Rich Presence: держим активность в текущем состоянии.

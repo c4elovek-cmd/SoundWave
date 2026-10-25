@@ -8,7 +8,7 @@ import {
   SkipForward,
   SpinnerGap,
   X,
-} from "@phosphor-icons/react";
+} from "../../lib/icons";
 import { usePlayerStore } from "../../stores/playerStore";
 import { useAppStore } from "../../stores/appStore";
 import { useLyricsStore } from "../../stores/lyricsStore";

@@ -1,5 +1,5 @@
 import { useEffect, useState } from "react";
-import { Copy, Minus, Square, X } from "@phosphor-icons/react";
+import { Copy, Minus, Square, X } from "../../lib/icons";
 import { logAction } from "../../lib/actionLog";
 import { useAppStore } from "../../stores/appStore";
 import "./TitleBar.css";
