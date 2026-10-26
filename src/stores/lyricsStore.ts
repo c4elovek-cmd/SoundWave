@@ -9,6 +9,8 @@ export interface LyricsResult {
   url?: string;
   lyrics?: string;
   error?: string;
+  /** Трек — speed up / slowed версия: текст есть, караоке не имеет смысла. */
+  tempoModified?: boolean;
 }
 
 export interface SyncedLyricsResult {

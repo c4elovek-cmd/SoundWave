@@ -123,20 +123,32 @@
 }
 
 .lyrics-line.karaoke-line.active {
-  /* Текст заливается слева направо по ходу звука */
+  color: var(--text-primary);
+  font-weight: 700;
+  opacity: 1;
+  transform: translateX(4px);
+  animation: lyrics-line-in 320ms cubic-bezier(0.22, 1, 0.36, 1);
+}
+
+/* Одно слово караоке: свой градиент, своя доля времени.
+   Общий градиент на блоке красил бы всю фразу сразу, даже если она
+   перенесена на несколько визуальных строк. */
+.karaoke-word {
+  display: inline;
+  white-space: pre-wrap;
+}
+
+.karaoke-active .karaoke-word {
+  --word-fill: 0%;
   background: linear-gradient(
     90deg,
-    var(--accent) 0 var(--karaoke-progress, 0%),
-    var(--text-primary) var(--karaoke-progress, 0%) 100%
+    var(--accent) 0 var(--word-fill),
+    var(--text-primary) var(--word-fill) 100%
   );
   -webkit-background-clip: text;
   background-clip: text;
   color: transparent;
   -webkit-text-fill-color: transparent;
-  font-weight: 700;
-  opacity: 1;
-  transform: translateX(4px);
-  animation: lyrics-line-in 320ms cubic-bezier(0.22, 1, 0.36, 1);
 }
 
 @keyframes lyrics-line-in {
@@ -151,11 +163,24 @@
 }
 
 .lyrics-body.karaoke {
-  /* Доля пройденного времени строки — её двигает звук */
-  --karaoke-progress: 0%;
+  /* Заливка идёт по словам, общая переменная прогресса больше не нужна */
+  overflow-wrap: anywhere;
 }
 
 /* Панель инструментов над текстом */
+
+/* Пояснение: версия с изменённым темпом, караоке отключено */
+.lyrics-tempo-note {
+  margin: 0 12px 10px;
+  padding: 8px 10px;
+  border: 1px solid var(--border-subtle);
+  border-left: 2px solid var(--accent);
+  border-radius: 6px;
+  color: var(--text-secondary);
+  font-family: var(--font-family);
+  font-size: 11px;
+  line-height: 1.45;
+}
 
 .lyrics-toolbar {
   display: flex;
@@ -194,6 +219,17 @@
   border-color: var(--accent);
   background: var(--accent-subtle);
   color: var(--accent);
+}
+
+/* Караоке недоступно (версия с изменённым темпом) */
+.lyrics-karaoke:disabled {
+  opacity: 0.45;
+  cursor: not-allowed;
+}
+
+.lyrics-karaoke:disabled:hover {
+  border-color: var(--border);
+  color: var(--text-secondary);
 }
 
 .lyrics-sync-dot {

@@ -20,6 +20,7 @@ import {
   SyncQuality,
 } from "../../lib/lyrics";
 import { BUILTIN_FONTS, CUSTOM_FONT_PREFIX, fontFamilies, fontStack } from "../../lib/fonts";
+import { KaraokeLine, paintKaraokeWords } from "./KaraokeLine";
 import "./Lyrics.css";
 
 export default function LyricsPanel() {
@@ -53,6 +54,11 @@ export default function LyricsPanel() {
   const timedLines = timed.lines;
   const syncQuality = timed.quality;
 
+  // Speed up / slowed версии: текст показываем, караоке — нет.
+  const tempoModified = Boolean(result?.tempoModified);
+  // Если караоке было включено глобально, для такого трека его глушим.
+  const karaokeActive = karaoke && !tempoModified;
+
   useEffect(() => {
     void load(currentTrack);
     // Панель перезагружает текст только при смене трека.
@@ -60,17 +66,19 @@ export default function LyricsPanel() {
   }, [currentTrack?.id]);
 
   // Точные тайминги нужны в караоке; по настройке — и всегда.
+  // Для speed up / slowed версий не ищем: у них другой темп, и тайминги
+  // оригинала разъедутся со звуком.
   useEffect(() => {
-    if (currentTrack && result?.found && (karaoke || exactSync)) {
+    if (currentTrack && result?.found && !result.tempoModified && (karaoke || exactSync)) {
       void loadSynced(currentTrack);
     }
-  }, [karaoke, exactSync, currentTrack?.id, result?.found, loadSynced]);
+  }, [karaoke, exactSync, currentTrack?.id, result?.found, result?.tempoModified, loadSynced]);
 
   // Отслеживаем текущую строку по времени аудио. Подписка на progress
   // дёргала бы панель 60 раз в секунду — здесь состояние меняется только
   // при переходе на новую строку.
   useEffect(() => {
-    if (!karaoke || timedLines.length === 0) {
+    if (!karaokeActive || timedLines.length === 0) {
       setActiveLine(-1);
       return;
     }
@@ -83,10 +91,12 @@ export default function LyricsPanel() {
       setActiveLine((prev) => (prev === next ? prev : next));
 
       // Заливка текста идёт по звуку: доля пройденного времени строки.
+      // Красим по словам — иначе фраза, перенесённая на несколько
+      // визуальных строк, заливалась бы вся сразу.
       const body = bodyRef.current;
       if (body) {
         const progress = lineProgress(timedLines, next, time);
-        body.style.setProperty("--karaoke-progress", `${(progress * 100).toFixed(2)}%`);
+        paintKaraokeWords(body, progress);
       }
 
       raf = requestAnimationFrame(tick);
@@ -94,11 +104,11 @@ export default function LyricsPanel() {
 
     raf = requestAnimationFrame(tick);
     return () => cancelAnimationFrame(raf);
-  }, [karaoke, timedLines]);
+  }, [karaokeActive, timedLines]);
 
   // Автопрокрутка к активной строке.
   useEffect(() => {
-    if (!karaoke || activeLine < 0) return;
+    if (!karaokeActive || activeLine < 0) return;
 
     const body = bodyRef.current;
     const element = body?.querySelector<HTMLElement>(`[data-line="${activeLine}"]`);
@@ -113,11 +123,11 @@ export default function LyricsPanel() {
       elementRect.height / 2;
 
     body.scrollTo({ top: Math.max(0, target), behavior: "smooth" });
-  }, [activeLine, karaoke]);
+  }, [activeLine, karaokeActive]);
 
   useEffect(() => {
-    if (!karaoke) bodyRef.current?.scrollTo({ top: 0 });
-  }, [currentTrack?.id, karaoke]);
+    if (!karaokeActive) bodyRef.current?.scrollTo({ top: 0 });
+  }, [currentTrack?.id, karaokeActive]);
 
   const seekToLine = (line: LyricsLine) => {
     if (line.start === null) return;
@@ -156,27 +166,45 @@ export default function LyricsPanel() {
         </div>
       ) : null}
 
+      {tempoModified && result?.found && result.lyrics && (
+        <div className="lyrics-tempo-note">
+          Это версия с изменённым темпом (speed up, slowed и т. п.) — караоке
+          отключено: строки оригинала разъехались бы со звуком. Текст ниже от
+          оригинального трека.
+        </div>
+      )}
+
       {result?.found && result.lyrics && (
         <div className="lyrics-toolbar">
           <button
-            className={`lyrics-karaoke ${karaoke ? "active" : ""}`}
-            onClick={() => setSetting("karaokeEnabled", !karaoke)}
-            title="Караоке: подсветка текущей строки"
+            className={`lyrics-karaoke ${karaokeActive ? "active" : ""}`}
+            onClick={() => !tempoModified && setSetting("karaokeEnabled", !karaoke)}
+            disabled={tempoModified}
+            title={
+              tempoModified
+                ? "Это версия с изменённым темпом (speed up, slowed): строки караоке разъехались бы со звуком"
+                : "Караоке: подсветка текущей строки"
+            }
           >
-            <Microphone size={14} weight={karaoke ? "fill" : "regular"} />
+            <Microphone size={14} weight={karaokeActive ? "fill" : "regular"} />
             Караоке
           </button>
 
           <button
             className="lyrics-karaoke"
-            onClick={openKaraokeFullscreen}
-            title="Караоке на весь экран"
+            onClick={() => !tempoModified && openKaraokeFullscreen()}
+            disabled={tempoModified}
+            title={
+              tempoModified
+                ? "Это версия с изменённым темпом (speed up, slowed): строки караоке разъехались бы со звуком"
+                : "Караоке на весь экран"
+            }
           >
             <ArrowsOut size={14} />
             Во весь экран
           </button>
 
-          {karaoke && (
+          {karaokeActive && (
             <span
               className={`lyrics-sync-dot ${
                 syncQuality === "exact"
@@ -252,7 +280,7 @@ export default function LyricsPanel() {
 
       <div
         ref={bodyRef}
-        className={`lyrics-body ${karaoke ? "karaoke" : ""}`}
+        className={`lyrics-body ${karaokeActive ? "karaoke" : ""}`}
         style={{ fontFamily: fontStackValue }}
       >
         {!currentTrack && (
@@ -290,27 +318,33 @@ export default function LyricsPanel() {
         {currentTrack && !loading && !error && timedLines.length > 0 && (
           <div
             className="lyrics-text"
-            style={{ fontSize: `${Math.min(28, fontSize + (karaoke ? 3 : 0))}px` }}
+            style={{ fontSize: `${Math.min(28, fontSize + (karaokeActive ? 3 : 0))}px` }}
           >
             {timedLines.map((line, index) => {
               if (line.isBlank) {
                 return <div key={index} className="lyrics-line blank" />;
               }
 
-              const active = karaoke && activeLine === index;
-              const clickable = karaoke && line.start !== null;
+              const active = karaokeActive && activeLine === index;
+              const clickable = karaokeActive && line.start !== null;
 
               return (
                 <div
                   key={index}
                   data-line={index}
                   className={`lyrics-line${line.isSection ? " section" : ""}${
-                    karaoke ? " karaoke-line" : ""
-                  }${active ? " active" : ""}${clickable ? " clickable" : ""}`}
+                    karaokeActive ? " karaoke-line" : ""
+                  }${active ? " active karaoke-active" : ""}${clickable ? " clickable" : ""}`}
                   onClick={clickable ? () => seekToLine(line) : undefined}
                   title={clickable ? "Перейти к этой строке" : undefined}
                 >
-                  {line.isSection ? line.text.slice(1, -1) : line.text}
+                  {line.isSection ? (
+                    line.text.slice(1, -1)
+                  ) : karaokeActive ? (
+                    <KaraokeLine text={line.text} />
+                  ) : (
+                    line.text
+                  )}
                 </div>
               );
             })}

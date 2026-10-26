@@ -54,6 +54,12 @@ pub struct PlainLyrics {
     /// Откуда взят текст: genius или lrclib.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub source: Option<String>,
+    /// Трек — версия с изменённым темпом (speed up, slowed и т. п.).
+    ///
+    /// Тайминги оригинала не подходят: строки караоке разъезжаются со
+    /// звуком. Флаг говорит интерфейсу не включать караоке.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub tempo_modified: Option<bool>,
 }
 
 /// Текст с таймингами строк (LRC).
@@ -107,6 +113,61 @@ static RE_DASH_SPLIT: Lazy<Regex> = Lazy::new(|| Regex::new(r"\s+[-–—]\s+").
 static RE_TAIL_WORDS: Lazy<Regex> = Lazy::new(|| {
     Regex::new(r"(?i)\s*\b(remix|prod|edit|version|live|bootleg|mix|demo)\b.*$").unwrap()
 });
+
+/// Приписки, которыми перезаливают трек с изменённым темпом или частотой.
+///
+/// Для таких версий караоке бессмысленно: LRC ищется по оригиналу, у
+/// которого другая длительность, и строки разъезжаются со звуком. Текст
+/// при этом ищем как обычно — он нужен.
+static RE_TEMPO_MARK: Lazy<Regex> = Lazy::new(|| {
+    Regex::new(
+        r"(?ix)
+        \s* [\(\[\{]\s*
+        (?: speed\s*up | sped\s*up | speedup
+          | slowed (?: \s+ (?: and | & | n ) \s* reverb | \s+ down | \s+ \+ )?
+          | ultra \s+ slowed
+          | super \s+ slowed
+          | daycore
+          | nightcore
+          | reverb
+          | bass \s+ boost (?: \s+ ed)?
+          | bass \s+ boosted
+          | 8d
+          | \d+(?:\.\d+)?x
+          | \d+\s*%
+        )\s* [\)\]\}]
+        | \s*\b(?:speed\s*up|sped\s*up|speedup|slowed|nightcore|daycore)\b
+        ",
+    )
+    .unwrap()
+});
+
+/// Трек — переработанная версия (speed up, slowed, reverb и т. п.).
+///
+/// У неё другой темп, поэтому тайминги оригинала не подходят: строки
+/// караоке разъезжаются со звуком.
+pub fn is_tempo_modified(title: &str) -> bool {
+    RE_TEMPO_MARK.is_match(title)
+}
+
+/// Название без приписок про темп и частоту.
+pub fn strip_tempo_marks(title: &str) -> String {
+    let text = RE_TEMPO_MARK.replace_all(title, " ");
+    let text = RE_DOUBLE_SPACES.replace_all(&text, " ");
+    text.trim().trim_matches(|c| c == '-' || c == '–' || c == '—' || c == '_')
+        .trim()
+        .to_string()
+}
+
+/// Варианты названия без приписок про темп: «speed up» только мешает поиску.
+pub fn strip_tempo_marks_all(title: &str) -> String {
+    let text = strip_tempo_marks(title);
+    if text.is_empty() {
+        title.to_string()
+    } else {
+        text
+    }
+}
 static RE_QUOTED: Lazy<Regex> = Lazy::new(|| Regex::new(r#"["'«]([^"'»\n]{2,80})["'»]"#).unwrap());
 static RE_LABELLED: Lazy<Regex> = Lazy::new(|| Regex::new(
     r"(?i)(?:original|оригинал|source|lyrics|текст|слова)\s*[:\-—]\s*([^\n]{2,80})",
@@ -260,6 +321,17 @@ pub fn title_variants(title: &str) -> Vec<String> {
     // Хвост вроде «remix», «prod», «live», «bootleg».
     add(RE_TAIL_WORDS.replace_all(&cleaned, "").trim().to_string());
 
+    // «(speed up)», «slowed + reverb» и подобное: версия другого трека,
+    // текст тот же, а приписка только мешает поиску.
+    add(strip_tempo_marks_all(&cleaned));
+
+    let without_tempo = strip_tempo_marks_all(&cleaned);
+    let stripped_parts: Vec<&str> = RE_DASH_SPLIT.split(&without_tempo).collect();
+    if stripped_parts.len() > 1 {
+        add(stripped_parts[stripped_parts.len() - 1].to_string());
+        add(stripped_parts[0].to_string());
+    }
+
     variants
 }
 
@@ -321,6 +393,54 @@ fn title_candidates_from_description(description: &str) -> Vec<String> {
     result
 }
 
+/// Два слова отличаются не больше чем на одну опечатку.
+///
+/// Перезаливы часто содержат опечатки в названии («Офицантка» вместо
+/// «Официантка»), и строгое сравнение такие треки не находит. Допускаем
+/// одну вставку, удаление или замену символа — но только для слов от пяти
+/// букв, иначе «дом» и «дым» станут одним словом.
+fn words_similar(a: &str, b: &str) -> bool {
+    if a == b {
+        return true;
+    }
+
+    let left: Vec<char> = a.chars().collect();
+    let right: Vec<char> = b.chars().collect();
+    let (long, short) = if left.len() >= right.len() {
+        (&left, &right)
+    } else {
+        (&right, &left)
+    };
+
+    if short.len() < 5 || long.len() - short.len() > 1 {
+        return false;
+    }
+
+    // Расстояние Левенштейна с ранним выходом: больше одной правки не нужно.
+    let mut prev: Vec<usize> = (0..=short.len()).collect();
+    let mut current = vec![0usize; short.len() + 1];
+
+    for (i, lc) in long.iter().enumerate() {
+        current[0] = i + 1;
+        let mut row_min = current[0];
+
+        for (j, sc) in short.iter().enumerate() {
+            let cost = usize::from(lc != sc);
+            let value = (prev[j] + cost).min(prev[j + 1] + 1).min(current[j] + 1);
+            current[j + 1] = value;
+            row_min = row_min.min(value);
+        }
+
+        if row_min > 1 {
+            return false;
+        }
+
+        std::mem::swap(&mut prev, &mut current);
+    }
+
+    prev[short.len()] <= 1
+}
+
 /// Насколько результат поиска похож на нужный трек.
 fn score_genius_song(song: &Value, titles: &[String], artists: &[String]) -> i32 {
     let song_title = normalize_text(song.get("title").and_then(|v| v.as_str()).unwrap_or(""));
@@ -356,7 +476,20 @@ fn score_genius_song(song: &Value, titles: &[String], artists: &[String]) -> i32
         }
 
         let words: Vec<&str> = want_title.split(' ').filter(|w| w.chars().count() > 2).collect();
-        if words.len() < 2 || want_title.chars().count() < 8 {
+        if words.is_empty() || want_title.chars().count() < 5 {
+            return 0;
+        }
+
+        // Название из одного слова («Официантка»): сравниваем с любым словом
+        // в названии на Genius — там бывает и перевод в скобках. Поправка на
+        // опечатку нужна: в перезаливах название часто искажено.
+        if words.len() == 1 {
+            let song_words: Vec<&str> = song_title.split(' ').collect();
+            let hit = song_words.iter().any(|sw| words_similar(sw, words[0]));
+            return if hit { 6 } else { 0 };
+        }
+
+        if want_title.chars().count() < 8 {
             return 0;
         }
 
@@ -364,8 +497,20 @@ fn score_genius_song(song: &Value, titles: &[String], artists: &[String]) -> i32
             return 6;
         }
 
-        let matched = words.iter().filter(|w| song_title.contains(*w)).count();
+        // Сравниваем слова по отдельности: так ловятся опечатки в названии
+        // («Офицантка» ↔ «Официантка») и лишние слова с одной стороны.
+        let song_words: Vec<&str> = song_title.split(' ').filter(|w| !w.is_empty()).collect();
+        let matched = words
+            .iter()
+            .filter(|w| song_words.iter().any(|sw| words_similar(sw, w)))
+            .count();
+
         if matched >= 2 && matched as f32 / words.len() as f32 >= 0.5 {
+            // Полное совпадение по словам (с точностью до опечатки) — почти
+            // наверняка та же песня.
+            if matched == words.len() && words.len() >= 2 {
+                return 6;
+            }
             return 3;
         }
 
@@ -440,19 +585,29 @@ async fn find_genius_lyrics(
     let artists = artist_variants(artist);
 
     let mut queries: Vec<String> = Vec::new();
+    let mut add_query = |value: String| {
+        let trimmed = value.trim().to_string();
+        if !trimmed.is_empty() && !queries.contains(&trimmed) {
+            queries.push(trimmed);
+        }
+    };
+
+    // Чередуем запросы с исполнителем и без него. Ник на SoundCloud часто не
+    // совпадает с именем артиста на Genius («nsssive» вместо «Папин
+    // Олимпос»), и запрос вместе с ним не находит вообще ничего. Раньше
+    // первые четыре запроса были только с исполнителем — и поиск упирался
+    // в пустоту.
     for t in &titles {
         for a in &artists {
-            let query = format!("{t} {a}").trim().to_string();
-            if !queries.contains(&query) {
-                queries.push(query);
-            }
+            add_query(format!("{t} {a}"));
         }
+        add_query(t.clone());
     }
 
     let mut seen: Vec<String> = Vec::new();
     let mut songs: Vec<Value> = Vec::new();
 
-    for query in queries.iter().take(4) {
+    for query in queries.iter().take(6) {
         let url = format!(
             "{GENIUS_ORIGIN}/api/search/multi?per_page=5&q={}",
             encode_uri_component(query)
@@ -549,6 +704,7 @@ async fn find_genius_lyrics(
                 lyrics: Some(lyrics),
                 error: None,
                 source: Some("genius".to_string()),
+                tempo_modified: None,
             };
         }
     }
@@ -594,10 +750,16 @@ pub async fn get_lyrics(title: &str, artist: &str, description: &str) -> PlainLy
         return serde_json::from_value(cached).unwrap_or_default();
     }
 
-    let result = match find_genius_lyrics(title, artist, description).await {
+    let mut result = match find_genius_lyrics(title, artist, description).await {
         result if result.found => result,
         _ => get_lrclib_plain_lyrics(title, artist).await,
     };
+
+    // Караоке для speed up / slowed версий бессмысленно: тайминги оригинала
+    // разъедутся со звуком. Говорим интерфейсу, но текст всё равно отдаём.
+    if is_tempo_modified(title) {
+        result.tempo_modified = Some(true);
+    }
 
     if let Ok(value) = serde_json::to_value(&result) {
         cache_set(&PLAIN_CACHE, key, value, GENIUS_CACHE_LIMIT);
@@ -704,6 +866,7 @@ async fn get_lrclib_plain_lyrics(title: &str, artist: &str) -> PlainLyrics {
                 .map(String::from),
             error: None,
             source: Some("lrclib".to_string()),
+            tempo_modified: None,
         },
         _ => PlainLyrics::default(),
     };
@@ -925,5 +1088,91 @@ mod tests {
         let text = extract_genius_lyrics(html);
         assert!(text.contains("Hello world"));
         assert!(!text.contains("<br>"));
+    }
+
+    #[test]
+    fn detects_tempo_versions() {
+        // Приписки, которыми перезаливают трек с другим темпом.
+        assert!(is_tempo_modified("Track (speed up)"));
+        assert!(is_tempo_modified("Track (slowed)"));
+        assert!(is_tempo_modified("Track (slowed + reverb)"));
+        assert!(is_tempo_modified("Track (slowed n reverb)"));
+        assert!(is_tempo_modified("Track (ultra slowed)"));
+        assert!(is_tempo_modified("Track [nightcore]"));
+        assert!(is_tempo_modified("Track (bass boosted)"));
+        assert!(is_tempo_modified("Track (8D)"));
+        assert!(is_tempo_modified("Track (1.25x)"));
+        assert!(is_tempo_modified("Track speed up"));
+
+        // Обычные приписки темп не меняют — караоке остаётся.
+        assert!(!is_tempo_modified("Track (prod. by Someone)"));
+        assert!(!is_tempo_modified("Track (Remix)"));
+        assert!(!is_tempo_modified("Track (Live)"));
+        assert!(!is_tempo_modified("Track [2024]"));
+        assert!(!is_tempo_modified("Официантка - Папин Олимпос"));
+    }
+
+    #[test]
+    fn strips_tempo_marks_for_search() {
+        assert_eq!(strip_tempo_marks("Track (speed up)"), "Track");
+        assert_eq!(
+            strip_tempo_marks("Офицантка - Папин Олимпос (speed up)"),
+            "Офицантка - Папин Олимпос"
+        );
+        assert_eq!(strip_tempo_marks("Track (slowed n reverb)"), "Track");
+        // Без приписок название не меняется.
+        assert_eq!(strip_tempo_marks("Track"), "Track");
+    }
+
+    #[test]
+    fn tempo_variant_keeps_song_name() {
+        // Для «Артист - Песня (speed up)» в вариантах должна появиться
+        // чистая «Песня» — иначе Genius не найдёт оригинал.
+        let variants = title_variants("Офицантка - Папин Олимпос (speed up)");
+        assert!(variants.iter().any(|v| v == "Папин Олимпос"));
+        assert!(variants.iter().any(|v| v == "Офицантка - Папин Олимпос"));
+    }
+
+    #[test]
+    fn compares_words_with_one_typo() {
+        // Перезаливы часто искажают название: одна опечатка не мешает.
+        assert!(words_similar("официантка", "офицантка"));
+        assert!(words_similar("олимпос", "олимпос"));
+        assert!(!words_similar("олимпос", "олимпиада"));
+        // Короткие слова сравниваем строго: «дом» и «дым» — разные песни.
+        assert!(!words_similar("дом", "дым"));
+        assert!(!words_similar("официантка", "пельмени"));
+    }
+
+    #[test]
+    fn scores_typo_title_without_artist() {
+        // Трек «Офицантка - Папин Олимпос (speed up)» от пользователя
+        // «nsssive». На Genius песня зовётся «Официантка (Waitress)» и
+        // принадлежит «Папин Олимпос». Ник перезаливщика там не встречается,
+        // поэтому оценка держится на названии с поправкой на опечатку.
+        let titles = title_variants("Офицантка - Папин Олимпос (speed up)");
+        let artists = artist_variants("nsssive");
+
+        let song = serde_json::json!({
+            "title": "Официантка (Waitress)",
+            "primary_artist": { "name": "Папин Олимпос (Papin Olympos)" }
+        });
+
+        let score = score_genius_song(&song, &titles, &artists);
+        assert!(score >= 5, "ожидали не меньше 5, получили {score}");
+    }
+
+    #[test]
+    fn rejects_other_song() {
+        let titles = title_variants("Офицантка - Папин Олимпос (speed up)");
+        let artists = artist_variants("nsssive");
+
+        let song = serde_json::json!({
+            "title": "Снежинка (Snowflake)",
+            "primary_artist": { "name": "Папин Олимпос (Papin Olympos)" }
+        });
+
+        // Артист совпал, но песня другая: текст брать нельзя.
+        assert!(score_genius_song(&song, &titles, &artists) < 10);
     }
 }

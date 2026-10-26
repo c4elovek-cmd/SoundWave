@@ -20,6 +20,7 @@ import {
   LyricsLine,
   SyncQuality,
 } from "../../lib/lyrics";
+import { KaraokeLine, paintKaraokeWords } from "./KaraokeLine";
 import { fontStack } from "../../lib/fonts";
 import { formatDuration } from "../../lib/soundcloud-api";
 import "./KaraokeFullscreen.css";
@@ -68,10 +69,12 @@ export default function KaraokeFullscreen() {
   }, [currentTrack?.id, load]);
 
   // Точная синхронизация нужна для караоке — подтягиваем LRC.
+  // Для speed up / slowed версий не ищем: у них другой темп, и тайминги
+  // оригинала разъедутся со звуком.
   useEffect(() => {
-    if (!currentTrack || !result?.found) return;
+    if (!currentTrack || !result?.found || result.tempoModified) return;
     void loadSynced(currentTrack);
-  }, [currentTrack?.id, result?.found, loadSynced]);
+  }, [currentTrack?.id, result?.found, result?.tempoModified, loadSynced]);
 
   useEffect(() => {
     localStorage.setItem("sw-karaoke-size", String(fontSize));
@@ -118,12 +121,11 @@ export default function KaraokeFullscreen() {
         setActiveLine((prev) => (prev === nextLine ? prev : nextLine));
 
         // Заливка текста идёт по звуку: доля пройденного времени строки.
+        // Красим по словам — иначе фраза, перенесённая на несколько
+        // визуальных строк, заливалась бы вся сразу.
         if (linesRef.current) {
           const progress = lineProgress(timedLines, nextLine, time);
-          linesRef.current.style.setProperty(
-            "--karaoke-progress",
-            `${(progress * 100).toFixed(2)}%`
-          );
+          paintKaraokeWords(linesRef.current, progress);
         }
       }
 
@@ -302,11 +304,11 @@ export default function KaraokeFullscreen() {
             {visibleLines.map((line) => (
               <div
                 key={line.index}
-                className={`karaoke-fs-line${line.active ? " active" : ""}${
+                className={`karaoke-fs-line${line.active ? " active karaoke-active" : ""}${
                   line.isSection ? " section" : ""
                 }`}
               >
-                {line.text}
+                <KaraokeLine text={line.text} section={line.isSection} />
               </div>
             ))}
           </div>

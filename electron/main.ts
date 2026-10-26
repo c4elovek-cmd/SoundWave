@@ -430,6 +430,13 @@ interface GeniusLyricsResult {
   error?: string;
   /** Откуда взят текст: Genius или запасной LRCLIB. */
   source?: "genius" | "lrclib";
+  /**
+   * Трек — версия с изменённым темпом (speed up, slowed и т. п.).
+   *
+   * Тайминги оригинала не подходят: строки караоке разъезжаются со звуком.
+   * Флаг говорит интерфейсу не включать караоке.
+   */
+  tempoModified?: boolean;
 }
 
 const geniusCache = new Map<string, { value: GeniusLyricsResult; at: number }>();
@@ -442,6 +449,69 @@ function normalizeGeniusText(value: unknown): string {
     .replace(/[^\p{L}\p{N}]+/gu, " ")
     .replace(/\s+/g, " ")
     .trim();
+}
+
+/**
+ * Приписки, которыми перезаливают трек с изменённым темпом или частотой.
+ *
+ * Для таких версий караоке бессмысленно: LRC ищется по оригиналу, у
+ * которого другая длительность, и строки разъезжаются со звуком. Текст
+ * при этом ищем как обычно — он нужен.
+ */
+const TEMPO_MARK_RE =
+  /\s*[([{]\s*(?:speed\s*up|sped\s*up|speedup|slowed(?:\s+(?:and|&|n)\s*reverb|\s+down|\s*\+)?|ultra\s+slowed|super\s+slowed|daycore|nightcore|reverb|bass\s+boost(?:ed)?|8d|\d+(?:\.\d+)?x|\d+\s*%)\s*[)\]}]|\s*\b(?:speed\s*up|sped\s*up|speedup|slowed|nightcore|daycore)\b/gi;
+
+/** Трек — переработанная версия (speed up, slowed, reverb и т. п.). */
+function isTempoModified(title: string): boolean {
+  TEMPO_MARK_RE.lastIndex = 0;
+  return TEMPO_MARK_RE.test(title);
+}
+
+/** Название без приписок про темп и частоту. */
+function stripTempoMarks(title: string): string {
+  return title
+    .replace(TEMPO_MARK_RE, " ")
+    .replace(/\s{2,}/g, " ")
+    .trim()
+    .replace(/^[-–—_]+|[-–—_]+$/g, "")
+    .trim();
+}
+
+/**
+ * Два слова отличаются не больше чем на одну опечатку.
+ *
+ * Перезаливы часто содержат опечатки в названии («Офицантка» вместо
+ * «Официантка»), и строгое сравнение такие треки не находит. Допускаем
+ * одну вставку, удаление или замену символа — но только для слов от пяти
+ * букв, иначе «дом» и «дым» станут одним словом.
+ */
+function wordsSimilar(a: string, b: string): boolean {
+  if (a === b) return true;
+
+  const left = [...a];
+  const right = [...b];
+  const [long, short] = left.length >= right.length ? [left, right] : [right, left];
+
+  if (short.length < 5 || long.length - short.length > 1) return false;
+
+  let prev = Array.from({ length: short.length + 1 }, (_, i) => i);
+  let current = new Array<number>(short.length + 1).fill(0);
+
+  for (let i = 0; i < long.length; i++) {
+    current[0] = i + 1;
+    let rowMin = current[0];
+
+    for (let j = 0; j < short.length; j++) {
+      const cost = long[i] === short[j] ? 0 : 1;
+      current[j + 1] = Math.min(prev[j] + cost, prev[j + 1] + 1, current[j] + 1);
+      rowMin = Math.min(rowMin, current[j + 1]);
+    }
+
+    if (rowMin > 1) return false;
+    [prev, current] = [current, prev];
+  }
+
+  return prev[short.length] <= 1;
 }
 
 /** Декодирует HTML-сущности, которые Genius использует в текстах. */
@@ -584,6 +654,17 @@ function titleVariants(title: string): string[] {
       .trim()
   );
 
+  // «(speed up)», «slowed + reverb» и подобное: версия другого трека,
+  // текст тот же, а приписка только мешает поиску.
+  const withoutTempo = stripTempoMarks(cleaned) || cleaned;
+  add(withoutTempo);
+
+  const strippedParts = withoutTempo.split(/\s+[-–—]\s+/);
+  if (strippedParts.length > 1) {
+    add(strippedParts[strippedParts.length - 1]);
+    add(strippedParts[0]);
+  }
+
   return [...variants];
 }
 
@@ -665,12 +746,33 @@ function scoreGeniusSong(
     if (songTitle === wantTitle) return 10;
 
     const words = wantTitle.split(" ").filter((word) => word.length > 2);
-    if (words.length < 2 || wantTitle.length < 8) return 0;
+    if (words.length === 0 || wantTitle.length < 5) return 0;
+
+    // Название из одного слова («Официантка»): сравниваем с любым словом в
+    // названии на Genius — там бывает и перевод в скобках. Поправка на
+    // опечатку нужна: в перезаливах название часто искажено.
+    if (words.length === 1) {
+      const songWords = songTitle.split(" ");
+      return songWords.some((word) => wordsSimilar(word, words[0])) ? 6 : 0;
+    }
+
+    if (wantTitle.length < 8) return 0;
 
     if (songTitle.includes(wantTitle) || wantTitle.includes(songTitle)) return 6;
 
-    const matched = words.filter((word) => songTitle.includes(word)).length;
-    if (matched >= 2 && matched / words.length >= 0.5) return 3;
+    // Сравниваем слова по отдельности: так ловятся опечатки в названии
+    // («Офицантка» ↔ «Официантка») и лишние слова с одной стороны.
+    const songWords = songTitle.split(" ").filter(Boolean);
+    const matched = words.filter((word) =>
+      songWords.some((songWord) => wordsSimilar(songWord, word))
+    ).length;
+
+    if (matched >= 2 && matched / words.length >= 0.5) {
+      // Полное совпадение по словам (с точностью до опечатки) — почти
+      // наверняка та же песня.
+      if (matched === words.length && words.length >= 2) return 6;
+      return 3;
+    }
 
     return 0;
   };
@@ -718,17 +820,24 @@ async function findGeniusLyrics(
   const artists = artistVariants(artist);
 
   const queries: string[] = [];
+  const addQuery = (value: string) => {
+    const query = value.trim();
+    if (query && !queries.includes(query)) queries.push(query);
+  };
+
+  // Чередуем запросы с исполнителем и без него. Ник на SoundCloud часто не
+  // совпадает с именем артиста на Genius («nsssive» вместо «Папин Олимпос»),
+  // и запрос вместе с ним не находит вообще ничего. Раньше первые четыре
+  // запроса были только с исполнителем — и поиск упирался в пустоту.
   for (const t of titles) {
-    for (const a of artists) {
-      const query = `${t} ${a}`.trim();
-      if (!queries.includes(query)) queries.push(query);
-    }
+    for (const a of artists) addQuery(`${t} ${a}`);
+    addQuery(t);
   }
 
   const seen = new Set<number | string>();
   const songs: any[] = [];
 
-  for (const query of queries.slice(0, 4)) {
+  for (const query of queries.slice(0, 6)) {
     let search: any;
     try {
       search = await fetchGenius(
@@ -2334,14 +2443,19 @@ function setupIPC() {  // Получить сохранённые настрой
       if (!title) return { found: false, error: "Не указано название трека" };
 
       const genius = await getGeniusLyrics(title, artist, payload?.description);
-      if (genius.found) return genius;
 
       // Genius не знает такой трек — берём текст из LRCLIB.
       // Там же лежат и тайминги, поэтому караоке будет точным.
-      const fallback = await getLrclibPlainLyrics(title, artist);
-      if (fallback.found) return fallback;
+      const found = genius.found ? genius : await getLrclibPlainLyrics(title, artist);
+      const result = found.found ? found : genius;
 
-      return genius;
+      // Караоке для speed up / slowed версий бессмысленно: тайминги
+      // оригинала разъедутся со звуком. Текст при этом отдаём — он нужен.
+      if (result.found && isTempoModified(title)) {
+        return { ...result, tempoModified: true };
+      }
+
+      return result;
     }
   );
 

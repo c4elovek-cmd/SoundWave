@@ -389,6 +389,22 @@ export function findActiveLine(lines: LyricsLine[], time: number): number {
   return active;
 }
 
+/** Когда заканчивается строка: начало следующей или «+4 секунды». */
+export function lineEnd(lines: LyricsLine[], index: number): number | null {
+  if (index < 0 || index >= lines.length) return null;
+
+  const line = lines[index];
+  if (line.start === null) return null;
+
+  for (let i = index + 1; i < lines.length; i++) {
+    const start = lines[i].start;
+    if (start !== null && start > line.start) return start;
+  }
+
+  // У последней строки явного конца нет — считаем её ровно четыре секунды.
+  return line.start + 4;
+}
+
 /**
  * Доля пройденного времени внутри строки (0..1).
  * Нужна для посимвольной заливки текста: она идёт ровно по звуку.
@@ -399,18 +415,57 @@ export function lineProgress(lines: LyricsLine[], index: number, time: number): 
   const line = lines[index];
   if (line.start === null) return 0;
 
-  let end: number | null = null;
-  for (let i = index + 1; i < lines.length; i++) {
-    const start = lines[i].start;
-    if (start !== null && start > line.start) {
-      end = start;
-      break;
-    }
-  }
-
-  // У последней строки явного конца нет — считаем её ровно четыре секунды.
+  const end = lineEnd(lines, index);
   const span = end !== null ? end - line.start : 4;
   if (span <= 0) return 1;
 
   return Math.min(1, Math.max(0, (time - line.start) / span));
+}
+
+/** Слово строки вместе с его долей времени — для заливки по словам. */
+export interface KaraokeWord {
+  text: string;
+  /** Пробел или перенос: рисовать без заливки. */
+  space: boolean;
+  /** Начало слова внутри строки, 0..1. */
+  from: number;
+  /** Конец слова внутри строки, 0..1. */
+  to: number;
+}
+
+/**
+ * Делит строку на слова и считает, какую долю времени занимает каждое.
+ *
+ * Нужно для заливки по словам: длинная фраза переносится на несколько
+ * визуальных строк, а один общий градиент на блоке красил бы все эти
+ * строки одновременно. Отдельные слова заливаются в порядке чтения, то
+ * есть сверху вниз, строка за строкой.
+ */
+export function splitKaraokeWords(text: string): KaraokeWord[] {
+  const parts = text.split(/(\s+)/);
+  const total = parts.reduce((sum, part) => sum + part.trim().length, 0);
+
+  if (total === 0) {
+    return parts
+      .filter((part) => part.length > 0)
+      .map((part) => ({ text: part, space: true, from: 0, to: 0 }));
+  }
+
+  const result: KaraokeWord[] = [];
+  let acc = 0;
+
+  for (const part of parts) {
+    if (part.length === 0) continue;
+
+    if (part.trim().length === 0) {
+      result.push({ text: part, space: true, from: 0, to: 0 });
+      continue;
+    }
+
+    const from = acc / total;
+    acc += part.length;
+    result.push({ text: part, space: false, from, to: acc / total });
+  }
+
+  return result;
 }
