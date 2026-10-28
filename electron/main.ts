@@ -1256,6 +1256,8 @@ async function getGeniusLyrics(
 const LRCLIB_API = "https://lrclib.net/api/search";
 const LRCLIB_UA = "SoundWave/0.1 (https://github.com/c4elovek-cmd/SoundWave)";
 const LRCLIB_TIMEOUT = 10_000;
+const KARALYR_API = "https://karalyr.com/api/get";
+const KARALYR_TIMEOUT = 10_000;
 const LRCLIB_CACHE_TTL = 6 * 60 * 60 * 1000;
 const LRCLIB_CACHE_LIMIT = 200;
 
@@ -1491,6 +1493,36 @@ async function getLrclibPlainLyrics(
       if (best && best.score >= 18) break;
     }
 
+    // Fallback: Karalyr — LRCLIB-совместимый сервис.
+    if (!best) {
+      try {
+        const url =
+          `${KARALYR_API}?track_name=${encodeURIComponent(title)}` +
+          `&artist_name=${encodeURIComponent(artist)}` +
+          `&duration=${Math.round(durationMs / 1000)}`;
+        const res = await fetch(url, {
+          headers: { "User-Agent": LRCLIB_UA, Accept: "application/json" },
+          signal: AbortSignal.timeout(KARALYR_TIMEOUT),
+        });
+        if (res.ok) {
+          const entry = await res.json();
+          const plain = entry?.plainLyrics;
+          if (typeof plain === "string" && plain.trim().length >= 40) {
+            const trackName = String(entry.trackName ?? "");
+            if (
+              lrcTitleMatches(entry, title) &&
+              versionMarkersCompatible(title, trackName) &&
+              lrcArtistMatches(entry, title, artist)
+            ) {
+              best = { entry, score: 8 };
+            }
+          }
+        }
+      } catch (e) {
+        log.warn("Karalyr: не удалось получить текст", e);
+      }
+    }
+
     if (best && best.score >= 4) {
       result = {
         found: true,
@@ -1574,6 +1606,36 @@ async function getSyncedLyrics(
         if (best && best.score >= 18) break;
       }
       if (best && best.score >= 18) break;
+    }
+
+    // Fallback: Karalyr — LRCLIB-совместимый сервис с word-synced караоке.
+    if (!best) {
+      try {
+        const url =
+          `${KARALYR_API}?track_name=${encodeURIComponent(title)}` +
+          `&artist_name=${encodeURIComponent(artist)}` +
+          `&duration=${Math.round(durationMs / 1000)}`;
+        const res = await fetch(url, {
+          headers: { "User-Agent": LRCLIB_UA, Accept: "application/json" },
+          signal: AbortSignal.timeout(KARALYR_TIMEOUT),
+        });
+        if (res.ok) {
+          const entry = await res.json();
+          const synced = entry?.syncedLyrics;
+          if (typeof synced === "string" && synced.trim().length > 20) {
+            const trackName = String(entry.trackName ?? "");
+            if (
+              lrcTitleMatches(entry, title) &&
+              versionMarkersCompatible(title, trackName) &&
+              lrcArtistMatches(entry, title, artist)
+            ) {
+              best = { entry, score: 8 };
+            }
+          }
+        }
+      } catch (e) {
+        log.warn("Karalyr: не удалось получить синхронизацию", e);
+      }
     }
 
     if (best && best.score >= 6) {

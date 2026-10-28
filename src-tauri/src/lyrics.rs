@@ -23,6 +23,8 @@ const GENIUS_CACHE_LIMIT: usize = 200;
 const LRCLIB_API: &str = "https://lrclib.net/api/search";
 const LRCLIB_UA: &str = "SoundWave/0.1 (https://github.com/c4elovek-cmd/SoundWave)";
 const LRCLIB_TIMEOUT: Duration = Duration::from_secs(10);
+const KARALYR_API: &str = "https://karalyr.com/api/get";
+const KARALYR_TIMEOUT: Duration = Duration::from_secs(10);
 const LRCLIB_CACHE_TTL: Duration = Duration::from_secs(6 * 60 * 60);
 const LRCLIB_CACHE_LIMIT: usize = 200;
 
@@ -1241,6 +1243,44 @@ async fn get_lrclib_plain_lyrics(title: &str, artist: &str, duration_ms: f64) ->
         }
     }
 
+    // Fallback: Karalyr — LRCLIB-совместимый, отдаёт plain-текст тоже.
+    if best.is_none() {
+        let url = format!(
+            "{}?track_name={}&artist_name={}&duration={}",
+            KARALYR_API,
+            encode_uri_component(title),
+            encode_uri_component(artist),
+            (duration_ms / 1000.0).round() as i64
+        );
+        if let Ok(response) = HTTP
+            .get(&url)
+            .header("User-Agent", LRCLIB_UA)
+            .header("Accept", "application/json")
+            .timeout(KARALYR_TIMEOUT)
+            .send()
+            .await
+        {
+            if response.status().is_success() {
+                if let Ok(entry) = response.json::<Value>().await {
+                    if let Some(plain) = entry.get("plainLyrics").and_then(|v| v.as_str()) {
+                        if plain.trim().chars().count() > 20 {
+                            let track_name = entry
+                                .get("trackName")
+                                .and_then(|v| v.as_str())
+                                .unwrap_or("");
+                            if lrc_title_matches(&entry, title)
+                                && version_markers_compatible(title, track_name)
+                                && lrc_artist_matches(&entry, title, artist)
+                            {
+                                best = Some((8.0, entry));
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
+
     let result = match best {
         Some((score, entry)) if score >= 4.0 => PlainLyrics {
             found: true,
@@ -1613,6 +1653,44 @@ pub async fn get_synced_lyrics(title: &str, artist: &str, duration_ms: f64) -> S
 
             if best.as_ref().map(|(s, _)| *s >= 18.0).unwrap_or(false) {
                 break 'outer;
+            }
+        }
+    }
+
+    // Fallback: Karalyr — LRCLIB-совместимый сервис с word-synced караоке.
+    if best.is_none() {
+        let url = format!(
+            "{}?track_name={}&artist_name={}&duration={}",
+            KARALYR_API,
+            encode_uri_component(title),
+            encode_uri_component(artist),
+            (duration_ms / 1000.0).round() as i64
+        );
+        if let Ok(response) = HTTP
+            .get(&url)
+            .header("User-Agent", LRCLIB_UA)
+            .header("Accept", "application/json")
+            .timeout(KARALYR_TIMEOUT)
+            .send()
+            .await
+        {
+            if response.status().is_success() {
+                if let Ok(entry) = response.json::<Value>().await {
+                    if let Some(synced) = entry.get("syncedLyrics").and_then(|v| v.as_str()) {
+                        if synced.trim().chars().count() > 20 {
+                            let track_name = entry
+                                .get("trackName")
+                                .and_then(|v| v.as_str())
+                                .unwrap_or("");
+                            if lrc_title_matches(&entry, title)
+                                && version_markers_compatible(title, track_name)
+                                && lrc_artist_matches(&entry, title, artist)
+                            {
+                                best = Some((8.0, entry));
+                            }
+                        }
+                    }
+                }
             }
         }
     }
