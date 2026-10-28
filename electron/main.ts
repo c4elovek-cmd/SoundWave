@@ -467,6 +467,24 @@ function isTempoModified(title: string): boolean {
   return TEMPO_MARK_RE.test(title);
 }
 
+const VERSION_MARKERS = [
+  "remix", "mix", "edit", "version", "live", "bootleg", "acoustic",
+  "instrumental", "radio", "extended", "slowed", "sped", "reverb",
+  "nightcore", "boosted", "cover", "acapella", "mashup", "flip",
+];
+
+function versionMarkers(title: string): string[] {
+  const lowered = title.toLowerCase();
+  return VERSION_MARKERS.filter((m) => lowered.includes(m));
+}
+
+function versionMarkersCompatible(wantTitle: string, trackTitle: string): boolean {
+  const want = versionMarkers(wantTitle);
+  if (want.length === 0) return true;
+  const track = versionMarkers(trackTitle);
+  return want.every((m) => track.includes(m));
+}
+
 /** Название без приписок про темп и частоту. */
 function stripTempoMarks(title: string): string {
   return title
@@ -486,13 +504,35 @@ function stripTempoMarks(title: string): string {
  * букв, иначе «дом» и «дым» станут одним словом.
  */
 function wordsSimilar(a: string, b: string): boolean {
+  return oneTypoApart(a, b, 5);
+}
+
+/**
+ * Одна опечатка в слове имени артиста.
+ *
+ * В названиях перезаливов имя исполнителя часто искажено: «ondra adar -
+ * cachalot.mp3» вместо «ONDA ANDAR — cachalot». Короткие псевдонимы — это
+ * обычно четыре буквы, и порог в пять букв такое имя не ловит. Послабление
+ * действует только для имён: в названиях оно склеивало бы разные песни.
+ */
+function artistWordSimilar(a: string, b: string): boolean {
+  return oneTypoApart(a, b, 4);
+}
+
+/**
+ * Слова отличаются не больше чем на одну вставку, удаление или замену.
+ *
+ * `minShort` — минимальная длина более короткого слова: короткие слова
+ * сравниваем строго, иначе «дом» и «дым» станут одним словом.
+ */
+function oneTypoApart(a: string, b: string, minShort: number): boolean {
   if (a === b) return true;
 
   const left = [...a];
   const right = [...b];
   const [long, short] = left.length >= right.length ? [left, right] : [right, left];
 
-  if (short.length < 5 || long.length - short.length > 1) return false;
+  if (short.length < minShort || long.length - short.length > 1) return false;
 
   let prev = Array.from({ length: short.length + 1 }, (_, i) => i);
   let current = new Array<number>(short.length + 1).fill(0);
@@ -620,11 +660,47 @@ function cleanTitle(title: string): string {
     .replace(/\([^()]*\)/g, " ")
     .replace(/\[[^\]]*\]/g, " ")
     .replace(/\{[^{}]*\}/g, " ")
+    // Расширение файла в названии: «cachalot.mp3» на Genius зовётся
+    // «cachalot», и с расширением поиск не находит ничего.
+    .replace(/\.(mp3|wav|m4a|flac|ogg|aac|opus|webm)\b/gi, " ")
     .replace(/\bprod\.?\s*by\b.*$/i, " ")
     .replace(/\bmix\b.*$/i, " ")
     .replace(/[|_]+/g, " ")
     .replace(/\s{2,}/g, " ")
     .trim();
+}
+
+/**
+ * Кириллица в латиницу: страницы Genius часто озаглавлены транслитерацией
+ * («Красавица» → «Krasavitsa», «Гуляю» → «Gulyayu»), и без такого варианта
+ * русское название не совпадает ни с чем. Схема близка к той, которой
+ * пользуется Genius: ц → ts, ч → ch, ш → sh, щ → shch, х → kh, ю → yu,
+ * я → ya; твёрдый и мягкий знаки отбрасываются.
+ */
+function translitRu(value: string): string {
+  const map: Record<string, string> = {
+    а: "a", б: "b", в: "v", г: "g", д: "d", е: "e", ё: "e", ж: "zh",
+    з: "z", и: "i", й: "y", к: "k", л: "l", м: "m", н: "n", о: "o",
+    п: "p", р: "r", с: "s", т: "t", у: "u", ф: "f", х: "kh", ц: "ts",
+    ч: "ch", ш: "sh", щ: "shch", ъ: "", ы: "y", ь: "", э: "e",
+    ю: "yu", я: "ya", і: "i", ї: "yi", є: "ye", ґ: "g",
+  };
+
+  let result = "";
+  let changed = false;
+
+  for (const ch of value) {
+    const lower = ch.toLowerCase();
+    const mapped = map[lower];
+    if (mapped === undefined) {
+      result += ch;
+    } else {
+      changed = true;
+      result += mapped;
+    }
+  }
+
+  return changed ? result : value;
 }
 
 /** Варианты названия: исходное, очищенное, часть после тире и без хвоста. */
@@ -665,6 +741,32 @@ function titleVariants(title: string): string[] {
     add(strippedParts[0]);
   }
 
+  // Слэш и хвостовые метки: «RANE/ШИПЫ ONDA ANDAR #2016» на LRCLIB лежит
+  // как «RANE — ONDA ANDAR», и целиком такое название не находится.
+  const noTags = withoutTempo.replace(/(?:^|\s)#\S+/g, " ").replace(/\s{2,}/g, " ").trim();
+  add(noTags);
+
+  for (const piece of noTags.split(/\s*\/\s*/)) {
+    add(piece.trim());
+  }
+
+  // Каждое слово отдельно: по названию из одного слова LRCLIB и Genius
+  // ищут гораздо лучше, чем по склейке из нескольких.
+  for (const piece of noTags.split(/\s*\/\s*/)) {
+    for (const word of piece.split(/\s+/)) {
+      if (word.replace(/[^\p{L}\p{N}]/gu, "").length >= 4) add(word);
+    }
+  }
+
+  // Транслитерация кириллицы: «Anguish - Красавица» на Genius лежит как
+  // «ANGUISH — Krasavitsa (Remix)». Вариант добавляем в конец, чтобы он не
+  // отнимал место у обычных запросов.
+  for (const value of [...variants]) {
+    if (/[^\x00-\x7F]/.test(value) && /\p{L}/u.test(value)) {
+      add(translitRu(value));
+    }
+  }
+
   return [...variants];
 }
 
@@ -673,13 +775,134 @@ function artistVariants(artist: string): string[] {
   const variants = new Set<string>();
   const add = (value: string) => {
     const trimmed = value.trim();
-    if (trimmed.length > 1) variants.add(trimmed);
+    // Звёздочки, точки и прочие заглушки («*») артистом не считаем:
+    // с ними LRCLIB не находит ничего.
+    const hasLetters = /[\p{L}\p{N}]/u.test(trimmed);
+    if (trimmed.length > 1 && hasLetters) variants.add(trimmed);
   };
 
   add(artist);
   add(artist.replace(/\([^()]*\)/g, " ").replace(/\[[^\]]*\]/g, " ").replace(/\s{2,}/g, " ").trim());
 
   return [...variants];
+}
+
+/**
+ * Исполнитель, названный прямо в названии трека: «RANE/ШИПЫ ONDA ANDAR
+ * #2016» → «шипы onda andar», «Песня - Артист» → «артист». Нужно, чтобы
+ * короткий запрос вроде «RANE» не подхватывал чужую песню с тем же словом,
+ * но другим исполнителем (Genius по слову «RANE» отдаёт «Rane — Anastasija»).
+ * Работает по сырому названию: разделители «/» и «-» нормализация уже
+ * убрала бы.
+ */
+/**
+ * Слова, которые в теге артиста отделяют одного исполнителя от другого.
+ */
+const ARTIST_JOIN_WORDS = ["feat", "ft", "featuring", "x", "х", "і", "и", "and", "with"];
+
+/**
+ * Отдельные исполнители внутри тега: «k0vertessence; B4YLUm» → два имени.
+ *
+ * Нормализация стирает запятые и амперсанды, поэтому делим по сырой строке.
+ * «city» в «Gorgon City» остаётся частью имени: это не второй исполнитель,
+ * и «gorgon» не должен считаться совпадением с «gorgon city».
+ */
+function artistParts(artist: string): string[] {
+  const text = String(artist ?? "")
+    .toLowerCase()
+    .replace(/\(.*?\)|\[.*?\]/g, " ");
+
+  const parts: string[] = [];
+
+  for (const chunk of text.split(/[,;&/+|·×]/)) {
+    let current: string[] = [];
+
+    for (const raw of chunk.split(/\s+/)) {
+      const word = normalizeGeniusText(raw);
+      if (!word) continue;
+
+      if (ARTIST_JOIN_WORDS.includes(word)) {
+        if (current.length > 0) {
+          parts.push(current.join(" "));
+          current = [];
+        }
+      } else {
+        current.push(word);
+      }
+    }
+
+    if (current.length > 0) parts.push(current.join(" "));
+  }
+
+  return parts;
+}
+
+/**
+ * Совпадают ли имена исполнителей.
+ *
+ * Сравнение строгое: «gorgon» и «gorgon city» — разные артисты, хотя одно
+ * имя целиком входит в другое. Совпадением считаем:
+ *  * полностью одинаковые имена;
+ *  * общего участника коллаборации («k0vertessence» ↔ «k0vertessence; B4YLUm»);
+ *  * одну опечатку при одинаковом числе слов.
+ */
+function artistNamesMatch(left: string, right: string): boolean {
+  const leftNorm = normalizeGeniusText(left);
+  const rightNorm = normalizeGeniusText(right);
+
+  if (!leftNorm || !rightNorm) return false;
+  if (leftNorm === rightNorm) return true;
+
+  const leftParts = artistParts(left);
+  const rightParts = artistParts(right);
+
+  if (leftParts.some((a) => rightParts.includes(a))) return true;
+
+  // Одна опечатка в имени. Число слов должно совпадать: иначе «gorgon»
+  // и «gorgon city» прошли бы как опечатка.
+  const sameWords = (a: string, b: string) => {
+    const aWords = a.split(" ").filter(Boolean);
+    const bWords = b.split(" ").filter(Boolean);
+    return (
+      aWords.length === bWords.length &&
+      aWords.every((word, index) => wordsSimilar(word, bWords[index]))
+    );
+  };
+
+  return (
+    sameWords(leftNorm, rightNorm) ||
+    leftParts.some((a) => rightParts.some((b) => sameWords(a, b)))
+  );
+}
+
+function artistFromTitle(title: string): string | null {
+  const text = (title ?? "").trim();
+  if (!text) return null;
+
+  // Часть после слэша: коллабы и перезаливы часто пишут так.
+  const slashParts = text.split("/");
+  if (slashParts.length > 1) {
+    const cleaned = normalizeGeniusText(
+      cleanTitle(stripTempoMarks(slashParts[1].replace(/(?:^|\s)#\S+/g, " ")))
+    );
+    if (cleaned.length >= 4) return cleaned;
+  }
+
+  // Часть после последнего тире: «Песня - Артист» или «Артист - Песня».
+  const dashParts = text.split("-");
+  if (dashParts.length > 1) {
+    const cleaned = normalizeGeniusText(
+      cleanTitle(stripTempoMarks(dashParts[dashParts.length - 1]))
+    );
+    if (
+      cleaned.length >= 4 &&
+      !cleaned.split(" ").some((w) => w === "feat" || w === "ft")
+    ) {
+      return cleaned;
+    }
+  }
+
+  return null;
 }
 
 /**
@@ -726,13 +949,27 @@ function scoreGeniusSong(
   titles: string[],
   artists: string[]
 ): number {
+  const rawSongArtist = String(song?.primary_artist?.name ?? "");
   const songTitle = normalizeGeniusText(song?.title);
-  const songArtist = normalizeGeniusText(song?.primary_artist?.name);
+  const songArtist = normalizeGeniusText(rawSongArtist);
 
   if (!songTitle || !songArtist) return -100;
 
   const wantTitles = titles.map(normalizeGeniusText).filter(Boolean);
   const wantArtists = artists.map(normalizeGeniusText).filter(Boolean);
+
+  // Исполнитель, названный в самом названии трека («RANE/ШИПЫ ONDA ANDAR
+  // #2016» → «шипы onda andar»). Если Genius вернул другого артиста —
+  // короткое совпадение названия (одно слово) нельзя считать уверенным,
+  // иначе «RANE» подхватывает чужую «Rane — Anastasija».
+  const titleArtist = normalizeGeniusText(artistFromTitle(titles[0] ?? "") ?? "");
+  const artistConsistent = !titleArtist || artistNamesMatch(rawSongArtist, titleArtist);
+
+  // Исполнитель записи совпал с кем-то из известных нам имён (тег трека
+  // или его вариант). Это главный признак, что песня та же.
+  const artistMatched = artists.some((wantArtist) =>
+    artistNamesMatch(rawSongArtist, wantArtist)
+  );
 
   const isTranslation =
     songArtist.startsWith("genius ") &&
@@ -779,14 +1016,86 @@ function scoreGeniusSong(
 
   const artistScore = (wantArtist: string): number => {
     if (!wantArtist || !songArtist) return 0;
-    if (songArtist === wantArtist) return 8;
-    if (songArtist.includes(wantArtist) || wantArtist.includes(songArtist)) return 4;
+    if (normalizeGeniusText(wantArtist) === songArtist) return 8;
+    if (artistNamesMatch(rawSongArtist, wantArtist)) return 4;
     return 0;
   };
 
-  let score = 0;
-  for (const wantTitle of wantTitles) score = Math.max(score, titleScore(wantTitle));
-  for (const wantArtist of wantArtists) score = Math.max(score, artistScore(wantArtist));
+  // Название и артист складываются: точное совпадение обоих — сильнее,
+  // чем любого по отдельности. Раньше брался максимум, и чужая песня с
+  // точным названием весила столько же, сколько верная пара «название +
+  // артист», а при равном счёте побеждала та, что попалась раньше.
+  const titleBest = wantTitles.reduce(
+    (best, wantTitle) => Math.max(best, titleScore(wantTitle)),
+    0
+  );
+  const artistBest = artists.reduce(
+    (best, wantArtist) => Math.max(best, artistScore(wantArtist)),
+    0
+  );
+  let score = titleBest + artistBest;
+
+  // Артист на Genius назван словами сырого названия SoundCloud-трека
+  // («миномет нежеголь(The mortar)» → «Нежеголь (Nezhegol)»): сильный
+  // признак, что запись правильная, ведь тег артиста часто содержит
+  // ник загрузившего, а не настоящего исполнителя. Без этой поправки
+  // чужая песня с тем же названием обгоняет верную.
+  //
+  // Бонус работает только когда название уже хоть как-то совпало. Иначе
+  // «The Temptations — My Girl» проходила бы на трек с названием
+  // «temptation»: имя группы похоже на слово из названия, а сама песня —
+  // совсем другая.
+  let artistNamedInTitle = false;
+  {
+    const rawTitle = normalizeGeniusText(titles[0] ?? "");
+    const titleWords = rawTitle.split(" ").filter((word) => word.length >= 4);
+    const artistWords = songArtist.split(" ").filter((word) => word.length >= 4);
+
+    if (titleWords.length > 0 && artistWords.length > 0 && titleBest > 0) {
+      const matched = artistWords.filter((artistWord) =>
+        titleWords.some((titleWord) => artistWordSimilar(titleWord, artistWord))
+      ).length;
+
+      if (matched / artistWords.length >= 0.5) {
+        score += 8;
+        artistNamedInTitle = true;
+      }
+    }
+  }
+
+  // Название в треке называет исполнителя («…/… ONDA ANDAR»), а у записи
+  // Genius — чужой. Короткое совпадение в одно слово («RANE») тогда не
+  // должно давать «уверенный» балл: это другая песня. Жёстко режем ниже
+  // порога приёма (4), чтобы такой результат не побеждал LRCLIB с верной
+  // записью.
+  if (!artistConsistent && score < 13) {
+    score = Math.min(score, 3);
+  }
+
+  // Без совпадения артиста держаться можно только за сильное название.
+  //  * Однословное «GLUTTONY» есть у десятков исполнителей, а «temptation»
+  //    от Gorgon City — не «temptation» от gorgon. Даже точная длительность
+  //    не делает такую запись верной.
+  //  * Название покрывает половину слов трека или меньше — скорее всего,
+  //    найдена другая песня с общим словом («Truth» внутри «truth yandere»).
+  // Исключения — артист назван в названии трека: это обычные перезаливы,
+  // где в теге загрузчика стоит ник, а настоящий исполнитель в названии.
+  const artistConfident = artistMatched ||
+    artistNamedInTitle ||
+    (Boolean(titleArtist) && artistConsistent);
+
+  if (!artistConfident) {
+    const rawTitle = normalizeGeniusText(titles[0] ?? "");
+    const words = rawTitle.split(" ").filter((word) => word.length > 1);
+    const singleWordTitle = words.length < 2;
+    const coverage = words.length === 0
+      ? 1
+      : words.filter((word) => songTitle.includes(word)).length / words.length;
+
+    if (singleWordTitle || coverage <= 0.5) {
+      score = Math.min(score, 3);
+    }
+  }
 
   return score;
 }
@@ -837,7 +1146,7 @@ async function findGeniusLyrics(
   const seen = new Set<number | string>();
   const songs: any[] = [];
 
-  for (const query of queries.slice(0, 6)) {
+  for (const query of queries.slice(0, 10)) {
     let search: any;
     try {
       search = await fetchGenius(
@@ -961,11 +1270,76 @@ interface SyncedLyricsResult {
 
 const lrclibCache = new Map<string, { value: SyncedLyricsResult; at: number }>();
 
+/**
+ * Артист записи LRCLIB совпадает с артистом трека или назван в названии.
+ *
+ * Название в названии — обычный случай перезалива: в теге артиста стоит ник
+ * загрузившего («nsssive»), а настоящий исполнитель указан в самом названии.
+ * Пустой артист трека ничего не говорит — тогда не мешаем выбирать по
+ * названию и длительности.
+ */
+function lrcArtistMatches(entry: any, title: string, artist: string): boolean {
+  const wantTitle = normalizeGeniusText(title);
+  const wantArtist = normalizeGeniusText(artist);
+  const rawTrackArtist = String(entry?.artistName ?? "");
+  const trackArtist = normalizeGeniusText(rawTrackArtist);
+
+  if (!wantArtist) return true;
+  if (!trackArtist) return false;
+
+  if (trackArtist.length >= 4 && wantTitle.includes(trackArtist)) return true;
+
+  return artistNamesMatch(artist, rawTrackArtist);
+}
+
+/**
+ * Доля слов искомого названия, которые есть в названии записи LRCLIB.
+ *
+ * «Truth» от Jaxomy покрывает лишь одно слово из «truth yandere^^ (ultra
+ * slowed)» — это другая песня, даже если длительности случайно совпали.
+ */
+function lrcTitleCoverage(entry: any, title: string): number {
+  const want = normalizeGeniusText(title);
+  const track = normalizeGeniusText(entry?.trackName);
+  const words = want.split(" ").filter((word) => word.length > 1);
+
+  if (words.length === 0) return 0;
+
+  const matched = words.filter((word) => track.includes(word)).length;
+  return matched / words.length;
+}
+
+/** Разница длительности записи LRCLIB и трека в миллисекундах. */
+function lrcDurationDiff(entry: any, durationMs: number): number {
+  return typeof entry?.duration === "number"
+    ? Math.abs(entry.duration * 1000 - durationMs)
+    : Number.POSITIVE_INFINITY;
+}
+
+/**
+ * Стоит ли заменить текущего кандидата LRCLIB этим.
+ *
+ * При равной оценке выбираем запись, ближайшую по длительности: на одну
+ * песню на LRCLIB бывают и оригинал, и ускоренная версия, и по названию с
+ * артистом они неотличимы — но ближайшая по времени точнее по структуре.
+ */
+function isBetterLrc(
+  score: number,
+  entry: any,
+  best: { entry: any; score: number } | null,
+  durationMs: number
+): boolean {
+  if (!best) return true;
+  if (score > best.score) return true;
+  return score === best.score && lrcDurationDiff(entry, durationMs) < lrcDurationDiff(best.entry, durationMs);
+}
+
 function scoreLrcTrack(entry: any, title: string, artist: string, durationMs: number): number {
   const wantTitle = normalizeGeniusText(title);
   const wantArtist = normalizeGeniusText(artist);
   const trackTitle = normalizeGeniusText(entry?.trackName);
-  const trackArtist = normalizeGeniusText(entry?.artistName);
+  const rawTrackArtist = String(entry?.artistName ?? "");
+  const trackArtist = normalizeGeniusText(rawTrackArtist);
 
   if (!trackTitle) return -100;
 
@@ -983,10 +1357,19 @@ function scoreLrcTrack(entry: any, title: string, artist: string, durationMs: nu
     }
   }
 
+  // Артист записи назван в нашем названии трека — сильный признак, что это
+  // та же песня. Нужен и когда артист трека известен: у перезаливов в теге
+  // стоит ник загрузившего («nsssive»), а не настоящий исполнитель.
+  if (trackArtist.length >= 4 && wantTitle.includes(trackArtist)) {
+    score += 8;
+  }
+
   if (wantArtist && trackArtist) {
     if (trackArtist === wantArtist) {
       score += 8;
-    } else if (trackArtist.includes(wantArtist) || wantArtist.includes(trackArtist)) {
+    } else if (artistNamesMatch(artist, rawTrackArtist)) {
+      // Коллаборация: у записи «k0vertessence; B4YLUm», у трека
+      // «k0vertessence». Исполнитель тот же, просто тег полнее.
       score += 4;
     }
   }
@@ -999,7 +1382,47 @@ function scoreLrcTrack(entry: any, title: string, artist: string, durationMs: nu
     else if (diff > 45_000) score -= 3;
   }
 
+  // Чужой артист — доверять одному названию нельзя.
+  //  * Название покрывает половину слов трека или меньше («Truth» внутри
+  //    «truth yandere» после отбрасывания «(ultra slowed)») — это другая
+  //    песня, даже если длительности совпали.
+  //  * Однословное название вроде «Рассвет» слишком общее: без артиста
+  //    верим только точной длительности.
+  //  * Многословное и уникальное название («ВЫЗВАЛ ШЛЮХУ x mylancore»)
+  //    пропускаем: перезаливы и ремиксы часто отличаются по длительности.
+  const singleWordTitle = wantTitle.split(" ").filter(Boolean).length < 2;
+  if (!lrcArtistMatches(entry, title, artist)) {
+    const weakTitle = lrcTitleCoverage(entry, title) <= 0.5;
+
+    // Однословное название («temptation», «Рассвет») без совпадения артиста
+    // слишком общее: «gorgon — temptation» и «Gorgon City — Sweet
+    // Temptation» — разные песни даже при точной длительности.
+    if (weakTitle || singleWordTitle) score = Math.min(score, 3);
+  }
+
   return score;
+}
+
+/**
+ * Совпадает ли название записи LRCLIB с искомым.
+ *
+ * Отдельно от оценки: одной только близкой длительности и знакомого
+ * исполнителя мало — иначе для «Официантка - Папин Олимпос» побеждала бы
+ * любая другая песня того же артиста, лишь бы совпала по времени.
+ */
+function lrcTitleMatches(entry: any, title: string): boolean {
+  const want = normalizeGeniusText(title);
+  const track = normalizeGeniusText(entry?.trackName);
+
+  if (!want || !track) return false;
+  if (track === want || track.includes(want) || want.includes(track)) return true;
+
+  // Хотя бы одно слово названия должно найтись в названии записи:
+  // «RANE» из «RANE/ШИПЫ ONDA ANDAR #2016» подходит, «СХИ» — нет.
+  return want
+    .split(" ")
+    .filter((word) => word.length > 2)
+    .some((word) => track.includes(word));
 }
 
 /**
@@ -1011,9 +1434,10 @@ function scoreLrcTrack(entry: any, title: string, artist: string, durationMs: nu
  */
 async function getLrclibPlainLyrics(
   title: string,
-  artist: string
+  artist: string,
+  durationMs = 0
 ): Promise<GeniusLyricsResult> {
-  const cacheKey = `plain|${title.toLowerCase()}|${artist.toLowerCase()}`;
+  const cacheKey = `plain|${title.toLowerCase()}|${artist.toLowerCase()}|${Math.round(durationMs / 1000)}`;
   const cached = geniusCache.get(cacheKey);
   if (cached && Date.now() - cached.at < GENIUS_CACHE_TTL) {
     return cached.value;
@@ -1022,16 +1446,19 @@ async function getLrclibPlainLyrics(
   let result: GeniusLyricsResult;
 
   try {
-    const titles = [title, ...titleVariants(title)].slice(0, 3);
-    const artists = [artist, ...artistVariants(artist)].slice(0, 2);
+    // Вариантов бывает много (слэш, отдельные слова) — по одному запросу на
+    // каждый LRCLIB не любит, поэтому ограничиваемся самыми полезными.
+    const titles = [title, ...titleVariants(title)].slice(0, 6);
+    // Пустой артист — это поиск только по названию; так тоже ищем.
+    const artists = [artist, ...artistVariants(artist), ""].slice(0, 3);
 
     let best: { entry: any; score: number } | null = null;
 
     for (const t of titles) {
       for (const a of artists) {
-        const url =
-          `${LRCLIB_API}?track_name=${encodeURIComponent(t)}` +
-          `&artist_name=${encodeURIComponent(a)}`;
+        const url = a
+          ? `${LRCLIB_API}?track_name=${encodeURIComponent(t)}&artist_name=${encodeURIComponent(a)}`
+          : `${LRCLIB_API}?track_name=${encodeURIComponent(t)}`;
 
         const res = await fetch(url, {
           headers: { "User-Agent": LRCLIB_UA, Accept: "application/json" },
@@ -1047,13 +1474,21 @@ async function getLrclibPlainLyrics(
           if (!entry || typeof entry.plainLyrics !== "string") continue;
           if (entry.plainLyrics.trim().length < 40) continue;
 
-          const score = scoreLrcTrack(entry, title, artist, 0);
-          if (!best || score > best.score) best = { entry, score };
+          // Название должно хоть как-то совпасть: иначе при поиске по одному
+          // слову («RANE») в выборку попадают десятки чужих песен, и
+          // побеждает случайная с подходящей длительностью.
+          if (!lrcTitleMatches(entry, title)) continue;
+
+          // Оценка идёт по исходному названию, а не по варианту запроса:
+          // иначе «RANE» из «RANE/ШИПЫ» засчиталось бы как точное
+          // совпадение с чужой песней «Rane» другого исполнителя.
+          const score = scoreLrcTrack(entry, title, artist, durationMs);
+          if (isBetterLrc(score, entry, best, durationMs)) best = { entry, score };
         }
 
-        if (best && best.score >= 12) break;
+        if (best && best.score >= 18) break;
       }
-      if (best && best.score >= 12) break;
+      if (best && best.score >= 18) break;
     }
 
     if (best && best.score >= 4) {
@@ -1082,6 +1517,11 @@ async function getSyncedLyrics(
   artist: string,
   durationMs: number
 ): Promise<SyncedLyricsResult> {
+  // Для speed up / slowed версий караоке бессмысленно.
+  if (isTempoModified(title)) {
+    return { found: false };
+  }
+
   const cacheKey = `${title.toLowerCase()}|${artist.toLowerCase()}|${Math.round(durationMs / 1000)}`;
   const cached = lrclibCache.get(cacheKey);
 
@@ -1118,13 +1558,22 @@ async function getSyncedLyrics(
           if (!entry || typeof entry.syncedLyrics !== "string") continue;
           if (entry.syncedLyrics.trim().length <= 20) continue;
 
+          // Та же проверка названия, что и для текста: иначе караоке
+          // подхватит тайминги чужой песни того же исполнителя.
+          if (!lrcTitleMatches(entry, title)) continue;
+
+          // Ремикс/версия: если в названии трека есть маркер версии,
+          // а у записи LRCLIB его нет — это другая песня.
+          const trackName = String(entry.trackName ?? "");
+          if (!versionMarkersCompatible(title, trackName)) continue;
+
           const score = scoreLrcTrack(entry, title, artist, durationMs);
-          if (!best || score > best.score) best = { entry, score };
+          if (isBetterLrc(score, entry, best, durationMs)) best = { entry, score };
         }
 
-        if (best && best.score >= 12) break;
+        if (best && best.score >= 18) break;
       }
-      if (best && best.score >= 12) break;
+      if (best && best.score >= 18) break;
     }
 
     if (best && best.score >= 6) {
@@ -2245,9 +2694,10 @@ function setupIPC() {  // Получить сохранённые настрой
 
   // Лайк / снятие лайка.
   //
-  // SoundCloud больше не хранит лайки отдельной записью: это трек в
-  // системном плейлисте «personalized-tracks» пользователя. Путь и метод
-  // (PUT — поставить лайк, DELETE — снять) — те же, что использует веб-клиент.
+  // Тот же путь, что использует веб-клиент SoundCloud:
+  // PUT/DELETE /users/{userId}/track_likes/{trackId}. Пробованный ранее
+  // документированный POST /likes/tracks/{urn} принимает только OAuth-
+  // клиентов из Dev Portal (403 для веб client_id).
   ipcMain.handle(
     "sc-toggle-like",
     async (_event, trackId: number, like: boolean) => {
@@ -2255,10 +2705,9 @@ function setupIPC() {  // Получить сохранённые настрой
         const userId = await getCurrentUserId();
         const clientId = await getClientId();
 
-        const urn = `soundcloud:system-playlists:personalized-tracks:${userId}:${trackId}`;
         const url =
-          `${API_V2}/users/${userId}/system_playlist_likes/${urn}` +
-          `?client_id=${clientId}&app_version=1792400581&app_locale=ru`;
+          `${API_V2}/users/${userId}/track_likes/${trackId}` +
+          `?client_id=${clientId}`;
 
         const res = await withScThrottle(async () =>
           fetch(url, {
@@ -2270,10 +2719,11 @@ function setupIPC() {  // Получить сохранённые настрой
         const body = await res.text();
         log.info(`Лайк ${like ? "+" : "-"} трек ${trackId}: ${res.status} ${body.slice(0, 120)}`);
 
-        // Повторный PUT (трек уже лайкнут) SoundCloud отвечает 500,
-        // а DELETE несуществующего лайка — 404. В обоих случаях нужное
-        // состояние уже достигнуто, поэтому это не ошибка.
-        const stateAlreadyReached = (like && res.status === 500) || (!like && res.status === 404);
+        // Повторный PUT (трек уже лайкнут) и DELETE несуществующего лайка
+        // уже дают нужное состояние, поэтому это не ошибка.
+        const stateAlreadyReached =
+          (like && (res.status === 400 || res.status === 409 || res.status === 500)) ||
+          (!like && res.status === 404);
 
         if (!res.ok && !stateAlreadyReached) {
           throw new Error(
@@ -2435,10 +2885,11 @@ function setupIPC() {  // Получить сохранённые настрой
     "genius-lyrics",
     async (
       _event,
-      payload: { title?: string; artist?: string; description?: string }
+      payload: { title?: string; artist?: string; description?: string; duration?: number }
     ) => {
       const title = String(payload?.title ?? "").trim();
       const artist = String(payload?.artist ?? "").trim();
+      const duration = Number(payload?.duration ?? 0) || 0;
 
       if (!title) return { found: false, error: "Не указано название трека" };
 
@@ -2446,7 +2897,9 @@ function setupIPC() {  // Получить сохранённые настрой
 
       // Genius не знает такой трек — берём текст из LRCLIB.
       // Там же лежат и тайминги, поэтому караоке будет точным.
-      const found = genius.found ? genius : await getLrclibPlainLyrics(title, artist);
+      const found = genius.found
+        ? genius
+        : await getLrclibPlainLyrics(title, artist, duration);
       const result = found.found ? found : genius;
 
       // Караоке для speed up / slowed версий бессмысленно: тайминги

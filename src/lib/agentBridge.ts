@@ -7,7 +7,7 @@
 import { usePlayerStore } from "../stores/playerStore";
 import { useAppStore, View } from "../stores/appStore";
 import { scApi, getArtwork } from "./soundcloud-api";
-import { parseLrc } from "./lyrics";
+import { calibrateLrcDuration, parseLrc } from "./lyrics";
 import { logAction } from "./actionLog";
 import { SCPlaylist, SCTrack, SCUser } from "../types/soundcloud";
 import { errorText } from "./errorText";
@@ -360,11 +360,42 @@ async function handleRequest(request: AgentRequest): Promise<unknown> {
       const wantSynced = payload.synced !== false;
 
       const [lyricsResult, syncedResult] = await Promise.allSettled([
-        window.electronAPI.getLyrics(title, artist),
+        window.electronAPI.getLyrics(title, artist, track.description ?? "", track.duration ?? 0),
         wantSynced
           ? window.electronAPI.getSyncedLyrics(title, artist, track.duration ?? 0)
           : Promise.resolve(null),
       ]);
+
+      // Караоке искали по сырому названию трека. Если не нашлось, но текст
+      // уже есть — пробуем ещё раз по каноническому названию из текста:
+      // сырое имя с SoundCloud часто искажено (слэш, метки, версии «speed
+      // up»), и LRCLIB по нему не находит тайминги, хотя по чистому имени
+      // нашёл бы. Не блокируем ответ — текст уже готов.
+      if (
+        wantSynced &&
+        syncedResult.status === "fulfilled" &&
+        (!syncedResult.value || !syncedResult.value.found) &&
+        lyricsResult.status === "fulfilled" &&
+        lyricsResult.value?.found &&
+        lyricsResult.value?.title
+      ) {
+        const canonicalTitle = lyricsResult.value.title;
+        const canonicalArtist = lyricsResult.value.artist ?? artist;
+        if (canonicalTitle !== title || canonicalArtist !== artist) {
+          try {
+            const retry = await window.electronAPI.getSyncedLyrics(
+              canonicalTitle,
+              canonicalArtist,
+              track.duration ?? 0
+            );
+            if (retry?.found) {
+              (syncedResult as PromiseFulfilledResult<any>).value = retry;
+            }
+          } catch {
+            // Не страшно: оставляем первую (пустую) попытку.
+          }
+        }
+      }
 
       const lyrics: {
         found: boolean;
@@ -391,6 +422,10 @@ async function handleRequest(request: AgentRequest): Promise<unknown> {
 
       const lrcLines =
         synced?.found && synced.syncedLyrics ? parseLrc(synced.syncedLyrics) : [];
+
+      // Те же тайминги, что показывает интерфейс: масштаб по длительности
+      // исходной записи LRCLIB (speed up / slowed версии).
+      calibrateLrcDuration(lrcLines, track.duration ?? 0, synced?.duration);
 
       const isCurrent = !player.currentTrack || player.currentTrack.id === track.id;
       const position = isCurrent ? player.audio?.currentTime ?? 0 : 0;
@@ -425,9 +460,13 @@ async function handleRequest(request: AgentRequest): Promise<unknown> {
     case "likes": {
       const limit = clamp(Number(payload.limit ?? 20) || 20, 1, 100);
       const result = await scApi.getMyLikes(undefined, limit);
+      const tracks = result.collection
+        .map((item: any) => item?.track ?? item)
+        .filter(Boolean)
+        .map((track) => simplifyTrack(track));
       return {
-        count: result.collection.length,
-        tracks: result.collection.map((track) => simplifyTrack(track)),
+        count: tracks.length,
+        tracks,
       };
     }
 

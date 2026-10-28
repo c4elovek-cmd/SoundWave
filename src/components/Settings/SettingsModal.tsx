@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { createPortal } from "react-dom";
 import {
   ArrowCounterClockwise,
@@ -18,7 +18,7 @@ import {
 } from "../../lib/icons";
 import { useAppStore } from "../../stores/appStore";
 import { usePlayerStore } from "../../stores/playerStore";
-import { useSettingsStore, UiStyle } from "../../stores/settingsStore";
+import { DEFAULTS, useSettingsStore, UiStyle } from "../../stores/settingsStore";
 import {
   BUILTIN_FONTS,
   CUSTOM_FONT_PREFIX,
@@ -29,6 +29,7 @@ import {
 } from "../../lib/fonts";
 import { BUILTIN_THEMES, CustomTheme, themeDataId } from "../../lib/themes";
 import { pushDiscordPresence } from "../../lib/discordPresence";
+import { showToast } from "../../stores/toastStore";
 import ThemeEditor from "../ThemeEditor/ThemeEditor";
 import "./SettingsModal.css";
 
@@ -102,6 +103,19 @@ function Row({
 
 export default function SettingsModal() {
   const closeSettings = useAppStore((s) => s.closeSettings);
+
+  // Плавное закрытие: сначала отыгрывает анимация «ухода»,
+  // затем модалка размонтируется.
+  const [closing, setClosing] = useState(false);
+  const close = () => {
+    if (closing) return;
+    if (document.documentElement.classList.contains("no-animations")) {
+      closeSettings();
+      return;
+    }
+    setClosing(true);
+    window.setTimeout(closeSettings, 170);
+  };
   const theme = useAppStore((s) => s.theme);
   const setTheme = useAppStore((s) => s.setTheme);
   const customThemes = useAppStore((s) => s.customThemes);
@@ -113,6 +127,58 @@ export default function SettingsModal() {
   const setCustomFonts = useSettingsStore((s) => s.setCustomFonts);
 
   const [tab, setTab] = useState<TabId>("appearance");
+
+  /**
+   * Смена вкладки через View Transitions API: окно настроек плавно
+   * «перетекает» в новый размер (иная вкладка — иная высота контента),
+   * а внутри окна контент кроссфейдится. Рывка высоты больше нет.
+   * Без поддержки API (или при выключенных анимациях) — просто замена.
+   */
+  const selectTab = (next: TabId) => {
+    if (next === tab) return;
+    const switchTab = () => setTab(next);
+    const doc = document as Document & {
+      startViewTransition?: (cb: () => void) => { finished: Promise<void> };
+    };
+    if (doc.startViewTransition && !document.documentElement.classList.contains("no-animations")) {
+      doc.startViewTransition(switchTab);
+    } else {
+      switchTab();
+    }
+  };
+
+  /**
+   * Сброс одного контрола к значению по умолчанию — по средней кнопке
+   * мыши (СКМ) на самом контроле. Показывает плашку с результатом.
+   * `apply` нужен для контролов, которым мало `set` (громкость, порт).
+   */
+  const resetByDefault = (
+    label: string,
+    key: keyof typeof DEFAULTS,
+    apply?: () => void
+  ) => {
+    const def = DEFAULTS[key];
+    if (settings[key] === def) return; // уже дефолт — ничего не щёлкаем
+
+    setSetting(key as never, def as never);
+    apply?.();
+    showToast({ title: `${label} — значение по умолчанию`, kind: "info" });
+  };
+
+  /** Атрибуты СКМ-сброса для любого контрола: auxclick с button === 1. */
+  const middleReset = (
+    label: string,
+    key: keyof typeof DEFAULTS,
+    apply?: () => void
+  ) => ({
+    onAuxClick: (e: React.MouseEvent) => {
+      if (e.button === 1) {
+        e.preventDefault();
+        resetByDefault(label, key, apply);
+      }
+    },
+    title: `${label} — средняя кнопка мыши: вернуть по умолчанию`,
+  });
   const [themeEditor, setThemeEditor] = useState<"new" | CustomTheme | null>(null);
   const [tokenVisible, setTokenVisible] = useState(false);
   const [copied, setCopied] = useState(false);
@@ -290,7 +356,19 @@ export default function SettingsModal() {
         return (
           <>
             <div className="settings-section">
-              <h3>Тема</h3>
+              {/* Средняя кнопка мыши — вернуть стандартную тему */}
+              <h3
+                onAuxClick={(e) => {
+                  if (e.button !== 1) return;
+                  e.preventDefault();
+                  if (theme === "dark") return;
+                  setTheme("dark");
+                  showToast({ title: "Тема — тёмная (по умолчанию)", kind: "info" });
+                }}
+                title="Средняя кнопка мыши: вернуть тему по умолчанию"
+              >
+                Тема
+              </h3>
               <div className="settings-theme-grid">
                 {BUILTIN_THEMES.map((item) => (
                   <button
@@ -351,6 +429,7 @@ export default function SettingsModal() {
                     key={item.id}
                     className={`settings-style-card ${settings.style === item.id ? "active" : ""}`}
                     onClick={() => setSetting("style", item.id)}
+                    {...middleReset("Стиль оформления", "style")}
                   >
                     <span className={`settings-style-preview ${item.id}`}>
                       <span />
@@ -372,11 +451,12 @@ export default function SettingsModal() {
                   checked={settings.animations}
                   onChange={(value) => setSetting("animations", value)}
                   label="Анимации"
+                  {...middleReset("Анимации", "animations")}
                 />
               </Row>
 
               <Row label="Плотность" hint="Компактный режим уменьшает отступы">
-                <div className="settings-segmented">
+                <div className="settings-segmented" {...middleReset("Плотность", "density")}>
                   {(["comfortable", "compact"] as const).map((value) => (
                     <button
                       key={value}
@@ -415,6 +495,7 @@ export default function SettingsModal() {
                   value={settings.lyricsFont}
                   onChange={(e) => setSetting("lyricsFont", e.target.value)}
                   style={{ fontFamily: lyricsFontStack }}
+                  {...middleReset("Шрифт текста", "lyricsFont")}
                 >
                   {BUILTIN_FONTS.map((font) => (
                     <option key={font.id} value={font.id} style={{ fontFamily: font.stack }}>
@@ -447,6 +528,7 @@ export default function SettingsModal() {
                   step={1}
                   value={settings.lyricsFontSize}
                   onChange={(e) => setSetting("lyricsFontSize", Number(e.target.value))}
+                  {...middleReset("Размер текста", "lyricsFontSize")}
                 />
               </Row>
 
@@ -458,6 +540,7 @@ export default function SettingsModal() {
                   checked={settings.karaokeEnabled}
                   onChange={(value) => setSetting("karaokeEnabled", value)}
                   label="Караоке по умолчанию"
+                  {...middleReset("Караоке по умолчанию", "karaokeEnabled")}
                 />
               </Row>
 
@@ -469,6 +552,7 @@ export default function SettingsModal() {
                   checked={settings.exactSync}
                   onChange={(value) => setSetting("exactSync", value)}
                   label="Точная синхронизация"
+                  {...middleReset("Точная синхронизация", "exactSync")}
                 />
               </Row>
             </div>
@@ -522,8 +606,9 @@ export default function SettingsModal() {
 
       case "player":
         return (
-          <div className="settings-section">
-            <h3>Воспроизведение</h3>
+          <>
+            <div className="settings-section">
+              <h3>Воспроизведение</h3>
 
             <Row label={`Громкость — ${Math.round(settings.volume * 100)}%`}>
               <input
@@ -538,6 +623,9 @@ export default function SettingsModal() {
                   setSetting("volume", value);
                   usePlayerStore.getState().setVolume(value);
                 }}
+                {...middleReset("Громкость", "volume", () => {
+                  usePlayerStore.getState().setVolume(DEFAULTS.volume);
+                })}
               />
             </Row>
 
@@ -546,11 +634,15 @@ export default function SettingsModal() {
                 checked={settings.shuffleOnStart}
                 onChange={(value) => setSetting("shuffleOnStart", value)}
                 label="Перемешивать при запуске"
+                {...middleReset("Перемешивание при запуске", "shuffleOnStart")}
               />
             </Row>
 
             <Row label="Повтор при запуске">
-              <div className="settings-segmented">
+              <div
+                className="settings-segmented"
+                {...middleReset("Повтор при запуске", "repeatOnStart")}
+              >
                 {(["off", "all", "one"] as const).map((value) => (
                   <button
                     key={value}
@@ -563,6 +655,53 @@ export default function SettingsModal() {
               </div>
             </Row>
           </div>
+
+          <div className="settings-section">
+            <h3>Аудио-визуализатор</h3>
+
+            <Row
+              label="Показывать визуализацию"
+              hint="Реакция на звук в фоне панели плеера"
+            >
+              <Switch
+                checked={settings.visualizerEnabled}
+                onChange={(value) => setSetting("visualizerEnabled", value)}
+                label="Аудио-визуализатор"
+                {...middleReset("Визуализатор", "visualizerEnabled")}
+              />
+            </Row>
+
+            <Row label="Стиль">
+              <div
+                className="settings-segmented"
+                {...middleReset("Стиль визуализатора", "visualizerStyle")}
+              >
+                {(["bars", "mirror", "wave"] as const).map((value) => (
+                  <button
+                    key={value}
+                    className={settings.visualizerStyle === value ? "active" : ""}
+                    onClick={() => setSetting("visualizerStyle", value)}
+                  >
+                    {value === "bars" ? "Столбики" : value === "mirror" ? "Зеркало" : "Волна"}
+                  </button>
+                ))}
+              </div>
+            </Row>
+
+            <Row label={`Высота — ${settings.visualizerHeight} px`}>
+              <input
+                type="range"
+                className="settings-range"
+                min={40}
+                max={140}
+                step={4}
+                value={settings.visualizerHeight}
+                onChange={(e) => setSetting("visualizerHeight", Number(e.target.value))}
+                {...middleReset("Высота визуализатора", "visualizerHeight")}
+              />
+            </Row>
+          </div>
+          </>
         );
 
       case "discord":
@@ -579,6 +718,9 @@ export default function SettingsModal() {
                   checked={settings.discordEnabled}
                   onChange={(value) => void applyDiscord({ enabled: value })}
                   label="Discord Rich Presence"
+                  {...middleReset("Discord Rich Presence", "discordEnabled", () => {
+                    void applyDiscord({ enabled: DEFAULTS.discordEnabled });
+                  })}
                 />
               </Row>
 
@@ -597,6 +739,9 @@ export default function SettingsModal() {
                     placeholder={discord?.clientId ?? "1562164443893211307"}
                     onChange={(e) => setSetting("discordClientId", e.target.value.trim())}
                     onBlur={(e) => void applyDiscord({ clientId: e.target.value.trim() })}
+                    {...middleReset("Client ID Discord", "discordClientId", () => {
+                      void applyDiscord({ clientId: "" });
+                    })}
                   />
                   {settings.discordClientId && (
                     <button
@@ -620,6 +765,9 @@ export default function SettingsModal() {
                   placeholder="soundwave"
                   onChange={(e) => setSetting("discordLargeImage", e.target.value.trim())}
                   onBlur={(e) => void applyDiscord({ largeImage: e.target.value.trim() })}
+                  {...middleReset("Имя картинки Discord", "discordLargeImage", () => {
+                    void applyDiscord({ largeImage: "" });
+                  })}
                 />
               </Row>
 
@@ -716,6 +864,9 @@ export default function SettingsModal() {
                 checked={settings.agentApiEnabled}
                 onChange={(value) => void applyApi({ enabled: value })}
                 label="Включить API"
+                {...middleReset("API для агентов", "agentApiEnabled", () => {
+                  void applyApi({ enabled: DEFAULTS.agentApiEnabled });
+                })}
               />
             </Row>
 
@@ -726,6 +877,9 @@ export default function SettingsModal() {
                   value={portDraft}
                   inputMode="numeric"
                   onChange={(e) => setPortDraft(e.target.value.replace(/\D/g, ""))}
+                  {...middleReset("Порт API", "agentApiPort", () => {
+                    void applyApi({ port: DEFAULTS.agentApiPort });
+                  })}
                 />
                 <button
                   className="settings-button small"
@@ -883,6 +1037,7 @@ export default function SettingsModal() {
                 checked={settings.actionLog}
                 onChange={(value) => setSetting("actionLog", value)}
                 label="Журнал действий"
+                {...middleReset("Журнал действий", "actionLog")}
               />
             </Row>
 
@@ -897,6 +1052,9 @@ export default function SettingsModal() {
                   void window.electronAPI?.setCloseToTray?.(value);
                 }}
                 label="Закрывать окно в трей"
+                {...middleReset("Закрывать в трей", "closeToTray", () => {
+                  void window.electronAPI?.setCloseToTray?.(DEFAULTS.closeToTray);
+                })}
               />
             </Row>
 
@@ -944,11 +1102,11 @@ export default function SettingsModal() {
   };
 
   return createPortal(
-    <div className="settings-backdrop" onClick={closeSettings}>
+    <div className={`settings-backdrop ${closing ? "closing" : ""}`} onClick={close}>
       <div className="settings-modal" onClick={(e) => e.stopPropagation()}>
         <header className="settings-head">
           <span>Настройки</span>
-          <button className="icon-btn" onClick={closeSettings} title="Закрыть">
+          <button className="icon-btn" onClick={close} title="Закрыть">
             <X size={16} />
           </button>
         </header>
@@ -961,7 +1119,7 @@ export default function SettingsModal() {
                 <button
                   key={item.id}
                   className={tab === item.id ? "active" : ""}
-                  onClick={() => setTab(item.id)}
+                  onClick={() => selectTab(item.id)}
                 >
                   <Icon size={17} />
                   {item.label}
@@ -970,7 +1128,9 @@ export default function SettingsModal() {
             })}
           </nav>
 
-          <div className="settings-content">{renderTab()}</div>
+          <div className="settings-content">
+            {renderTab()}
+          </div>
         </div>
       </div>
 

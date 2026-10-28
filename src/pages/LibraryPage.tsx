@@ -1,4 +1,4 @@
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { Heart, CloudArrowUp, MusicNotes, Play } from "../lib/icons";
 import { useAppStore } from "../stores/appStore";
 import { usePlayerStore } from "../stores/playerStore";
@@ -23,6 +23,21 @@ export default function LibraryPage({ mode }: Props) {
   const [error, setError] = useState<string | null>(null);
   const [nextHref, setNextHref] = useState<string | null>(null);
   const [loadingMore, setLoadingMore] = useState(false);
+
+  // Актуальные значения для колбэков, которые живут вне рендера
+  // (источник долива очереди и наблюдатель за низом списка).
+  const tracksRef = useRef<SCTrack[]>([]);
+  const nextHrefRef = useRef<string | null>(null);
+  const loadingMoreRef = useRef(false);
+  const sentinelRef = useRef<HTMLDivElement | null>(null);
+
+  useEffect(() => {
+    tracksRef.current = tracks;
+  }, [tracks]);
+
+  useEffect(() => {
+    nextHrefRef.current = nextHref;
+  }, [nextHref]);
 
   const load = async () => {
     if (!isLoggedIn) {
@@ -66,20 +81,79 @@ export default function LibraryPage({ mode }: Props) {
     });
   }, [mode, isLoggedIn]);
 
-  const loadMore = async () => {
-    if (!nextHref || loadingMore) return;
+  /**
+   * Тянет следующую страницу списка. Возвращает добавленные треки —
+   * этим пользуется и кнопка «Загрузить ещё», и очередь плеера.
+   * При сетевом сбое бросает исключение: очередь по нему понимает,
+   * что список не исчерпан, и попробует ещё раз на следующем треке.
+   */
+  const fetchNextPage = async (): Promise<SCTrack[]> => {
+    const href = nextHrefRef.current;
+    if (!href) return [];
+    if (loadingMoreRef.current) throw new Error("Страница уже загружается");
+
+    loadingMoreRef.current = true;
     setLoadingMore(true);
     try {
-      const res = await scApi.loadNext<any>(nextHref);
+      const res = await scApi.loadNext<any>(href);
       const items = res.collection ?? [];
       const list: SCTrack[] = items.map((i: any) => i.track ?? i).filter(Boolean);
-      setTracks((prev) => [...prev, ...list]);
-      // Пустая страница — значит, дальше треков нет
-      setNextHref(list.length > 0 ? res.next_href ?? null : null);
+
+      if (list.length > 0) {
+        setTracks((prev) => [...prev, ...list]);
+        // Пустой next_href — значит, дальше треков нет
+        setNextHref(res.next_href ?? null);
+
+        if (mode === "likes") {
+          setLikedTracks([...useAppStore.getState().likedTracks, ...list]);
+        } else {
+          setUploadedTracks([...useAppStore.getState().uploadedTracks, ...list]);
+        }
+      } else {
+        setNextHref(null);
+      }
+
+      return list;
     } finally {
+      loadingMoreRef.current = false;
       setLoadingMore(false);
     }
   };
+
+  const loadMore = () => void fetchNextPage().catch(() => {});
+
+  // Источник долива для плеера: пока играет трек из этого списка,
+  // следующая страница подтягивается сама — очередь не обрывается
+  // на границе первой сотни треков.
+  useEffect(() => {
+    const loader = async (): Promise<SCTrack[]> => {
+      const player = usePlayerStore.getState();
+      const current = player.currentTrack;
+      if (!current) return [];
+      // Слушают другой список — не подмешиваем в его очередь наши треки.
+      if (!tracksRef.current.some((track) => track.id === current.id)) return [];
+      return fetchNextPage();
+    };
+
+    usePlayerStore.getState().setQueueLoader(loader);
+    return () => usePlayerStore.getState().setQueueLoader(null);
+  }, [mode, isLoggedIn]);
+
+  // Список догружается и сам, когда до низа остаётся один экран.
+  useEffect(() => {
+    const sentinel = sentinelRef.current;
+    if (!sentinel || !nextHref) return;
+
+    const observer = new IntersectionObserver(
+      (entries) => {
+        if (entries.some((entry) => entry.isIntersecting)) loadMore();
+      },
+      { rootMargin: "400px 0px" }
+    );
+
+    observer.observe(sentinel);
+    return () => observer.disconnect();
+  }, [nextHref, mode, isLoggedIn]);
 
   const title = mode === "likes" ? "Мне нравится" : "Мои загрузки";
   const subtitle =
@@ -195,7 +269,10 @@ export default function LibraryPage({ mode }: Props) {
           ))}
 
           {nextHref && (
-            <div style={{ display: "flex", justifyContent: "center", padding: "20px 0" }}>
+            <div
+              ref={sentinelRef}
+              style={{ display: "flex", justifyContent: "center", padding: "20px 0" }}
+            >
               <button className="btn-ghost" onClick={loadMore} disabled={loadingMore}>
                 {loadingMore ? "Загрузка..." : "Загрузить ещё"}
               </button>

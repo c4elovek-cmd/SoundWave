@@ -42,7 +42,8 @@ declare global {
       getLyrics: (
         title: string,
         artist: string,
-        description?: string
+        description?: string,
+        duration?: number
       ) => Promise<{
         found: boolean;
         title?: string;
@@ -50,6 +51,8 @@ declare global {
         url?: string;
         lyrics?: string;
         error?: string;
+        /** Трек — speed up / slowed версия: текст есть, караоке не имеет смысла. */
+        tempoModified?: boolean;
       }>;
       openExternal: (url: string) => Promise<boolean>;
       getSyncedLyrics: (

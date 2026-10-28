@@ -259,6 +259,45 @@
   transition: none;
 }
 
+/* Кнопка копирования ссылки на карточке: маленький значок в углу обложки,
+   появляется при наведении вместе с кнопкой воспроизведения. */
+.track-card-copy {
+  position: absolute;
+  left: 10px;
+  top: 10px;
+  width: 30px;
+  height: 30px;
+  border-radius: 50%;
+  border: none;
+  background: rgba(0, 0, 0, 0.55);
+  color: #fff;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  cursor: pointer;
+  opacity: 0;
+  transform: translateY(-6px);
+  transition:
+    opacity 160ms cubic-bezier(0.2, 0.8, 0.3, 1),
+    transform 160ms cubic-bezier(0.2, 0.8, 0.3, 1),
+    background var(--transition-base);
+}
+
+.track-card:hover .track-card-copy,
+.track-card:focus-visible .track-card-copy,
+.track-card-copy:hover {
+  opacity: 1;
+  transform: none;
+}
+
+.track-card-copy:hover {
+  background: rgba(0, 0, 0, 0.75);
+}
+
+:root.no-animations .track-card-copy {
+  transition: none;
+}
+
 :root.no-animations .track-menu {
   animation: none;
 }

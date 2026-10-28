@@ -1,0 +1,18 @@
+/* Фоновая отрисовка спектра в панели плеера. Канвас живёт за контентом
+   и не перехватывает клики. */
+.visualizer-canvas {
+  position: absolute;
+  left: 0;
+  right: 0;
+  bottom: 0;
+  width: 100%;
+  pointer-events: none;
+  z-index: 0;
+  opacity: 0.6;
+}
+
+/* Контент плеера — поверх визуализатора */
+.player-bar > :not(.visualizer-canvas) {
+  position: relative;
+  z-index: 1;
+}

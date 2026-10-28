@@ -37,11 +37,46 @@ button {
 }
 
 /* Отключённые анимации */
-.no-animations *,
+.no-animations * ,
 .no-animations *::before,
 .no-animations *::after {
   transition: none !important;
   animation: none !important;
+}
+
+/* Мягкая смена темы: крупные поверхности и текст перетекают
+   в новые цвета вместо мгновенной подмены. Элементы со своими
+   transition-правилами это не задевает — свойство цветов у них
+   и так анимируется. */
+.theme-fade,
+.theme-fade #root,
+.theme-fade .app-shell,
+.theme-fade .app-main,
+.theme-fade .content-scroll,
+.theme-fade .top-bar,
+.theme-fade .sidebar,
+.theme-fade .player-bar,
+.theme-fade .settings-modal,
+.theme-fade .queue-panel {
+  transition:
+    background-color 320ms cubic-bezier(0.22, 1, 0.36, 1),
+    color 320ms cubic-bezier(0.22, 1, 0.36, 1),
+    border-color 320ms cubic-bezier(0.22, 1, 0.36, 1);
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .theme-fade,
+  .theme-fade #root,
+  .theme-fade .app-shell,
+  .theme-fade .app-main,
+  .theme-fade .content-scroll,
+  .theme-fade .top-bar,
+  .theme-fade .sidebar,
+  .theme-fade .player-bar,
+  .theme-fade .settings-modal,
+  .theme-fade .queue-panel {
+    transition: none;
+  }
 }
 
 /* Окно скрыто или в фоне — анимации на паузе, CPU не тратится. */
@@ -126,6 +161,29 @@ input {
 
 .fade-in {
   animation: fadeIn var(--transition-base);
+}
+
+/* Мягкое появление страницы при навигации: контент проступает
+   с лёгким подъёмом, смена раздела перестаёт «щёлкать». */
+.page-fade {
+  animation: page-in 260ms cubic-bezier(0.22, 1, 0.36, 1);
+}
+
+@keyframes page-in {
+  from {
+    opacity: 0;
+    transform: translateY(8px);
+  }
+  to {
+    opacity: 1;
+    transform: none;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .page-fade {
+    animation: none;
+  }
 }
 
 /* Range slider (громкость, прогресс) */

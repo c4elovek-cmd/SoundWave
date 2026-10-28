@@ -7,11 +7,13 @@ import {
   X,
   SignIn,
   Trash,
+  User,
 } from "./lib/icons";
 import Sidebar from "./components/Sidebar/Sidebar";
 import TitleBar from "./components/TitleBar/TitleBar";
 import ToastHost from "./components/Toast/Toast";
 import OfflineBanner from "./components/OfflineBanner/OfflineBanner";
+import UpdateBanner from "./components/UpdateBanner/UpdateBanner";
 import TrackPage from "./pages/TrackPage";
 import ArtistPage from "./pages/ArtistPage";
 import { logAction } from "./lib/actionLog";
@@ -44,6 +46,7 @@ export default function App() {
     setView,
     currentTrackId,
     currentArtistId,
+    currentPlaylistId,
     openTrack,
     openArtist,
     goBack,
@@ -311,6 +314,7 @@ export default function App() {
   return (
     <div className="app-shell">
       <TitleBar />
+      <UpdateBanner />
       <div className="app-body">
         <Sidebar />
 
@@ -349,7 +353,7 @@ export default function App() {
                     {currentUser?.avatar_url ? (
                       <img src={currentUser.avatar_url} alt="" />
                     ) : (
-                      (currentUser?.username?.[0] ?? "S").toUpperCase()
+                      <User size={16} weight="fill" />
                     )}
                   </div>
                   <span className="user-name">{currentUser?.username ?? "Аккаунт"}</span>
@@ -391,7 +395,16 @@ export default function App() {
 
           <OfflineBanner />
 
-          <div className="content-scroll">{renderView()}</div>
+          <div className="content-scroll">
+            {/* Ключ по типу страницы и её id: при навигации контент
+                мягко проступает, а не подменяется щелчком. */}
+            <div
+              className="page-fade"
+              key={`${view}:${currentPlaylistId ?? ""}:${currentArtistId ?? ""}:${currentTrackId ?? ""}`}
+            >
+              {renderView()}
+            </div>
+          </div>
         </div>
 
         {queueVisible && (

@@ -16,6 +16,7 @@ import { usePlayerStore } from "../../stores/playerStore";
 import { useAppStore } from "../../stores/appStore";
 import { downloadTrack, useDownloadStore } from "../../stores/downloadStore";
 import { trackUrl } from "../../lib/soundcloudLinks";
+import { showToast } from "../../stores/toastStore";
 import { logAction } from "../../lib/actionLog";
 import "./TrackMenu.css";
 
@@ -168,7 +169,9 @@ export default function TrackMenu({ track, queue, x, y, onClose }: Props) {
           run(() => {
             if (!url) return;
             logAction("menu_copy_link", { url });
-            void navigator.clipboard?.writeText(url);
+            void navigator.clipboard?.writeText(url).then(() => {
+              showToast({ title: "Ссылка скопирована", kind: "success", timeout: 2500 });
+            });
           })
         }
       >

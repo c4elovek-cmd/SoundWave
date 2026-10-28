@@ -18,6 +18,7 @@ import {
   ThumbsDown,
   DownloadSimple,
   Check,
+  LinkSimple,
 } from "../../lib/icons";
 import { usePlayerStore } from "../../stores/playerStore";
 import { useAppStore } from "../../stores/appStore";
@@ -29,7 +30,9 @@ import {
 } from "../../stores/downloadStore";
 import { formatDuration } from "../../lib/soundcloud-api";
 import { logAction } from "../../lib/actionLog";
+import { showToast } from "../../stores/toastStore";
 import { trackUrl, userUrl } from "../../lib/soundcloudLinks";
+import VisualizerCanvas from "./VisualizerCanvas";
 import "./Player.css";
 
 export default function Player() {
@@ -76,6 +79,20 @@ export default function Player() {
   /** Переход на страницу автора внутри приложения. */
   const openArtistPage = () => {
     if (currentTrack?.user?.id) openArtist(currentTrack.user.id);
+  };
+
+  /** Копирует ссылку на текущий трек в буфер обмена. */
+  const copyTrackLink = () => {
+    if (!currentTrack) return;
+    const url = trackUrl(currentTrack);
+    if (!url) {
+      showToast({ title: "Ссылка недоступна", kind: "error", timeout: 3000 });
+      return;
+    }
+    logAction("player_copy_link", { id: currentTrack.id, url });
+    void navigator.clipboard?.writeText(url).then(() => {
+      showToast({ title: "Ссылка скопирована", kind: "success", timeout: 2500 });
+    });
   };
 
   // События скачивания приходят из бэкенда — одно на всё приложение.
@@ -214,6 +231,9 @@ export default function Player() {
 
   return (
     <div className="player-bar" onWheel={handleWheel}>
+      {/* Фон — визуализатор (рисует звук, если включён в настройках) */}
+      <VisualizerCanvas />
+
       {/* Левая часть — трек */}
       <div className="player-track">
         <div className="player-artwork">
@@ -292,6 +312,15 @@ export default function Player() {
           ) : (
             <DownloadSimple size={17} />
           )}
+        </button>
+
+        <button
+          className="icon-btn player-copy"
+          onClick={copyTrackLink}
+          title="Скопировать ссылку на трек"
+          aria-label="Скопировать ссылку на трек"
+        >
+          <LinkSimple size={17} />
         </button>
 
         <button

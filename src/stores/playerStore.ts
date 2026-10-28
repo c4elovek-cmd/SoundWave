@@ -8,6 +8,12 @@ import { errorText } from "../lib/errorText";
 /** Момент последнего обновления позиции, пока окно было скрыто. */
 let lastHiddenSync = 0;
 
+/**
+ * Сколько треков должно остаться до конца очереди, чтобы начать
+ * подтягивать следующую порцию. Два — запас на время запроса.
+ */
+const QUEUE_PREFETCH_AHEAD = 2;
+
 interface PlayerState {
   // Состояние
   currentTrack: SCTrack | null;
@@ -26,8 +32,21 @@ interface PlayerState {
    * Волна ставит сюда свой refill; null — очередь конечна.
    */
   refill: (() => Promise<SCTrack[]>) | null;
+  /**
+   * Источник следующей страницы для очереди из обычного списка
+   * (лайки, загрузки): страница ставит сюда загрузку `next_href`.
+   * Тогда очередь растёт сама, без кнопки «Загрузить ещё».
+   */
+  queueLoader: (() => Promise<SCTrack[]>) | null;
   /** идёт доливка очереди — защита от повторного запуска */
   refilling: boolean;
+  /** Источник очереди исчерпан: дальше треков нет, доливать нечего. */
+  queueEnd: boolean;
+  /**
+   * Текущая очередь играет DRM-треки (волна). Держим на уровне стора,
+   * чтобы `next()` знал, пропускать защищённые треки или играть их.
+   */
+  allowDrm: boolean;
 
   // Элемент воспроизведения и HLS-плеер
   audio: HTMLAudioElement | null;
@@ -56,6 +75,14 @@ interface PlayerState {
   removeTrackById: (trackId: number) => void;
   clearQueue: () => void;
   setRefill: (fn: (() => Promise<SCTrack[]>) | null) => void;
+  setQueueLoader: (fn: (() => Promise<SCTrack[]>) | null) => void;
+  /**
+   * Доливает очередь заранее — когда до конца остаётся пара треков.
+   * Так музыка не обрывается на границе уже загруженного списка.
+   */
+  ensureQueueAhead: () => void;
+  /** Подтянуть следующую порцию из источника очереди. */
+  fetchMore: () => Promise<SCTrack[]>;
   setProgress: (p: number) => void;
   setError: (message: string | null) => void;
   /**
@@ -91,7 +118,10 @@ export const usePlayerStore = create<PlayerState>((set, get) => ({
   hls: null,
   error: null,
   refill: null,
+  queueLoader: null,
   refilling: false,
+  queueEnd: false,
+  allowDrm: false,
   playToken: 0,
   shouldPlay: false,
   waitingForNetwork: false,
@@ -112,9 +142,11 @@ export const usePlayerStore = create<PlayerState>((set, get) => ({
       return;
     }
 
-    // Нов�� попытка включения: всё, что придёт по старому токену, игнорируем.
+    // Новая попытка включения: всё, что придёт по старому токену, игнорируем.
     const token = get().playToken + 1;
-    set({ playToken: token, shouldPlay: true });
+    // Новая очередь — значит, источник долива мог смениться: снимаем
+    // отметку «источник исчерпан» и запоминаем режим DRM для `next()`.
+    set({ playToken: token, shouldPlay: true, allowDrm, queueEnd: false });
 
     logAction("play", {
       id: track.id,
@@ -284,6 +316,10 @@ export const usePlayerStore = create<PlayerState>((set, get) => ({
         progress: audio.currentTime / d,
         savedTimeOnDisconnect: audio.currentTime,
       });
+
+      // Заранее доливаем очередь: к моменту, когда текущий трек доиграет,
+      // следующие уже на месте и паузы на догрузку не будет.
+      get().ensureQueueAhead();
     });
 
     audio.addEventListener("waiting", () => {
@@ -337,6 +373,9 @@ export const usePlayerStore = create<PlayerState>((set, get) => ({
     });
 
     set({ audio });
+
+    // Если включили трек ближе к концу списка — сразу подтягиваем дальше.
+    get().ensureQueueAhead();
   },
 
   pause: () => {
@@ -381,64 +420,68 @@ export const usePlayerStore = create<PlayerState>((set, get) => ({
   },
 
   next: () => {
-    const { queue, queueIndex, repeat, isShuffled, play, refill } = get();
+    const { queue, queueIndex, repeat, isShuffled, play, allowDrm } = get();
     if (queue.length === 0) return;
 
     logAction("next", { id: get().currentTrack?.id });
 
-    let nextIndex: number;
+    // DRM-треки браузер не расшифровывает: в обычных списках их
+    // пропускаем, иначе очередь встаёт на первом же защищённом треке.
+    const playable = (track: SCTrack) => allowDrm || !track.drm;
 
     if (isShuffled) {
-      nextIndex = Math.floor(Math.random() * queue.length);
-    } else if (queueIndex < queue.length - 1) {
-      nextIndex = queueIndex + 1;
-    } else if (repeat === "all") {
-      nextIndex = 0;
-    } else if (refill) {
-      // Очередь кончилась, но волна ещё идёт — доливаем следующую порцию
-      if (get().refilling) return;
-      set({ refilling: true });
-
-      void (async () => {
-        let more: SCTrack[] = [];
-
-        try {
-          more = await refill();
-        } catch (e) {
-          console.error("Не удалось долить очередь:", e);
-          set({ refilling: false });
-          return;
-        }
-
-        // Пока шёл запрос, волну могли остановить или поставить на паузу.
-        // Тогда долитый трек включать нельзя — иначе музыка идёт сама.
-        if (!get().refill || !get().shouldPlay) {
-          set({ refilling: false });
-          return;
-        }
-
-        if (more.length === 0) {
-          set({ refilling: false });
-          return;
-        }
-
-        const current = get();
-        const grown = [...current.queue, ...more];
-        set({ queue: grown, refilling: false });
-        void current.play(grown[current.queueIndex + 1], grown, current.queueIndex + 1);
-      })();
-
+      const candidates = queue
+        .map((_, index) => index)
+        .filter((index) => playable(queue[index]));
+      if (candidates.length === 0) return;
+      const pick = candidates[Math.floor(Math.random() * candidates.length)];
+      play(queue[pick], queue, pick, { allowDrm });
       return;
-    } else {
-      return; // конец очереди
     }
 
-    const nextTrack = queue[nextIndex];
-    play(nextTrack, queue, nextIndex);
+    // Ближайший играемый трек впереди.
+    for (let index = queueIndex + 1; index < queue.length; index++) {
+      if (playable(queue[index])) {
+        play(queue[index], queue, index, { allowDrm });
+        return;
+      }
+    }
+
+    if (repeat === "all") {
+      const first = queue.findIndex(playable);
+      if (first >= 0) play(queue[first], queue, first, { allowDrm });
+      return;
+    }
+
+    // Очередь кончилась. Если у неё есть источник (волна или следующая
+    // страница списка) — доливаем и играем дальше, а не встаём.
+    const startedWith = { id: get().currentTrack?.id, index: queueIndex };
+    void (async () => {
+      const more = await get().fetchMore();
+      if (more.length === 0) return;
+
+      // Пока шёл запрос, могло всё смениться: другой трек, пауза, стоп.
+      const state = get();
+      if (
+        state.currentTrack?.id !== startedWith.id ||
+        state.queueIndex !== startedWith.index ||
+        !state.shouldPlay
+      ) {
+        return;
+      }
+
+      const offset = state.queue.length - more.length;
+      for (let index = offset; index < state.queue.length; index++) {
+        if (playable(state.queue[index])) {
+          void state.play(state.queue[index], state.queue, index, { allowDrm });
+          return;
+        }
+      }
+    })();
   },
 
   prev: () => {
-    const { queue, queueIndex, progress, currentTrack, play } = get();
+    const { queue, queueIndex, progress, currentTrack, play, allowDrm } = get();
     if (queue.length === 0) return;
 
     logAction("prev", { id: currentTrack?.id, progress });
@@ -446,12 +489,18 @@ export const usePlayerStore = create<PlayerState>((set, get) => ({
     // Если прошло > 3 сек — рестарт, иначе предыдущий
     if (progress > 0.03) {
       get().seek(0);
-    } else if (queueIndex > 0) {
-      const prevTrack = queue[queueIndex - 1];
-      play(prevTrack, queue, queueIndex - 1);
-    } else {
-      get().seek(0);
+      return;
     }
+
+    // Назад тоже пропускаем DRM-треки: иначе воспроизведение встанет.
+    for (let index = queueIndex - 1; index >= 0; index--) {
+      if (allowDrm || !queue[index].drm) {
+        play(queue[index], queue, index, { allowDrm });
+        return;
+      }
+    }
+
+    get().seek(0);
   },
 
   seek: (progress: number) => {
@@ -558,7 +607,75 @@ export const usePlayerStore = create<PlayerState>((set, get) => ({
   },
 
   setRefill: (fn) => {
-    set({ refill: fn, refilling: false });
+    set({ refill: fn, refilling: false, queueEnd: false });
+  },
+
+  setQueueLoader: (fn) => {
+    set({ queueLoader: fn, refilling: false, queueEnd: false });
+  },
+
+  /**
+   * Подтягивает следующую порцию треков из источника очереди: у «Моей
+   * волны» это её refill, у пагинируемых списков (лайки, загрузки) —
+   * следующая страница. Возвращает добавленные треки; пустой массив —
+   * источника нет либо он исчерпан.
+   */
+  fetchMore: async () => {
+    const { refill, queueLoader, refilling } = get();
+    if (refilling) return [];
+
+    const source = refill ?? queueLoader;
+    if (!source) return [];
+
+    set({ refilling: true });
+
+    let more: SCTrack[] = [];
+    try {
+      more = await source();
+    } catch (e) {
+      console.error("Не удалось долить очередь:", e);
+      set({ refilling: false });
+      return [];
+    }
+
+    const state = get();
+    // Источник могли убрать (остановка волны, уход со страницы) — тогда
+    // долитый трек включать нельзя: очередь уже другая.
+    if (!state.refill && !state.queueLoader) {
+      set({ refilling: false });
+      return [];
+    }
+
+    const known = new Set(state.queue.map((track) => track.id));
+    const fresh = more.filter(
+      (track) => track && !known.has(track.id) && (state.allowDrm || !track.drm)
+    );
+
+    if (fresh.length === 0) {
+      // Пусто — источник исчерпан: больше не дёргаем его вхолостую.
+      set({ refilling: false, queueEnd: true });
+      return [];
+    }
+
+    set({ queue: [...state.queue, ...fresh], refilling: false });
+    return fresh;
+  },
+
+  /**
+   * Упреждающая доливка: как только до конца очереди остаётся пара
+   * треков, подтягиваем следующую порцию заранее. Так переход к концу
+   * уже загруженного списка не превращается в паузу с догрузкой.
+   */
+  ensureQueueAhead: () => {
+    const { queue, queueIndex, refill, queueLoader, refilling, queueEnd } = get();
+    if (refilling || queueEnd) return;
+    if (!refill && !queueLoader) return;
+    if (queue.length === 0) return;
+
+    const remaining = queue.length - queueIndex - 1;
+    if (remaining > QUEUE_PREFETCH_AHEAD) return;
+
+    void get().fetchMore();
   },
 
   setProgress: (p: number) => set({ progress: p }),

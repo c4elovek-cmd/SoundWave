@@ -167,7 +167,7 @@ export function createTauriBridge(): Window["electronAPI"] {
       }),
 
     // --- Тексты песен ---
-    getLyrics: (title: string, artist: string, description?: string) =>
+    getLyrics: (title: string, artist: string, description?: string, duration?: number) =>
       invoke<{
         found: boolean;
         title?: string;
@@ -175,7 +175,14 @@ export function createTauriBridge(): Window["electronAPI"] {
         url?: string;
         lyrics?: string;
         error?: string;
-      }>("get_lyrics", { title, artist, description: description ?? "" }),
+        /** Трек — speed up / slowed версия: текст есть, караоке не имеет смысла. */
+        tempoModified?: boolean;
+      }>("get_lyrics", {
+        title,
+        artist,
+        description: description ?? "",
+        duration: duration ?? 0,
+      }),
     getSyncedLyrics: (title: string, artist: string, duration: number) =>
       invoke<{
         found: boolean;

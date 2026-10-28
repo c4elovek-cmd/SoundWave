@@ -101,11 +101,17 @@ if (isExternalPage) {
       ipcRenderer.invoke("sc-toggle-like", trackId, like),
 
     // Тексты песен с Genius и внешние ссылки
-    getLyrics: (title: string, artist: string, description?: string) =>
+    getLyrics: (
+      title: string,
+      artist: string,
+      description?: string,
+      duration?: number
+    ) =>
       ipcRenderer.invoke("genius-lyrics", {
         title,
         artist,
         description: description ?? "",
+        duration: duration ?? 0,
       }),
     getSyncedLyrics: (title: string, artist: string, duration: number) =>
       ipcRenderer.invoke("synced-lyrics", { title, artist, duration }),

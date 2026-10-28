@@ -46,9 +46,14 @@ export default function LyricsPanel() {
   const timed = useMemo(
     () =>
       result?.found && result.lyrics
-        ? buildTimedLyricsDetailed(result.lyrics, durationSec, synced?.syncedLyrics)
+        ? buildTimedLyricsDetailed(
+            result.lyrics,
+            durationSec,
+            synced?.syncedLyrics,
+            synced?.duration
+          )
         : { lines: [] as LyricsLine[], quality: "estimate" as SyncQuality },
-    [result?.found, result?.lyrics, durationSec, synced?.syncedLyrics]
+    [result?.found, result?.lyrics, durationSec, synced?.syncedLyrics, synced?.duration]
   );
 
   const timedLines = timed.lines;

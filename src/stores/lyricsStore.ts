@@ -40,12 +40,22 @@ interface LyricsState {
   loadSynced: (track: SCTrack | null) => Promise<void>;
 }
 
-const CACHE_KEY = "sw-lyrics-cache";
+const CACHE_KEY = "sw-lyrics-cache-v4";
 const CACHE_TTL = 30 * 24 * 60 * 60 * 1000;
 const CACHE_LIMIT = 100;
 
 function readCache(): LyricsCache {
   try {
+    // Старые ключи кэша отмирают сами: в них могли лежать тексты, найденные
+    // по старым правилам, — например, чужая «Миномёт» вместо «Миномёт
+    // (The Mortar)» от Нежеголь или чужой «Рассвет» для FORTUNA 812.
+    // v3: ужесточили отбор записей LRCLIB с чужим артистом.
+    // v4: сравнение артистов стало строгим («gorgon» ≠ «Gorgon City»), и
+    //     старый кэш мог держать чужой текст вроде «Gorgon City — Sweet
+    //     Temptation» для трека «gorgon — temptation» ещё 30 дней.
+    localStorage.removeItem("sw-lyrics-cache");
+    localStorage.removeItem("sw-lyrics-cache-v2");
+    localStorage.removeItem("sw-lyrics-cache-v3");
     const raw = localStorage.getItem(CACHE_KEY);
     if (!raw) return {};
     const parsed = JSON.parse(raw);
@@ -145,7 +155,8 @@ export const useLyricsStore = create<LyricsState>((set, get) => ({
       const response = await window.electronAPI.getLyrics(
         track.title,
         track.user?.username ?? "",
-        track.description ?? ""
+        track.description ?? "",
+        track.duration ?? 0
       );
 
       if (currentRequest !== requestId) return;
@@ -189,9 +200,21 @@ export const useLyricsStore = create<LyricsState>((set, get) => ({
         throw new Error("Мост к Electron недоступен");
       }
 
+      // Караоке ищем по тому же каноническому названию, что и текст: сырое
+      // имя трека с SoundCloud часто искажено (слэш, метки «#2016», версии
+      // «speed up»), и LRCLIB по нему не находит тайминги, хотя текст уже
+      // нашёлся. Для темп-версий текст всё равно не караоке, но запрос
+      // безопасен — вернётся found:false.
+      const resolvedTitle = state.result?.found
+        ? (state.result?.title ?? track.title)
+        : track.title;
+      const resolvedArtist = state.result?.found
+        ? (state.result?.artist ?? track.user?.username ?? "")
+        : (track.user?.username ?? "");
+
       const response = await window.electronAPI.getSyncedLyrics(
-        track.title,
-        track.user?.username ?? "",
+        resolvedTitle,
+        resolvedArtist,
         track.duration ?? 0
       );
 

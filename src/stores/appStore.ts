@@ -193,7 +193,15 @@ export const useAppStore = create<AppState>((set, get) => ({
 
     logAction("like", { id: track.id, title: track.title, liked: !liked });
 
-    const res = await window.electronAPI?.toggleLike(track.id, !liked);
+    let res: Awaited<ReturnType<NonNullable<Window["electronAPI"]>["toggleLike"]>> | undefined;
+    try {
+      res = await window.electronAPI?.toggleLike(track.id, !liked);
+    } catch (error) {
+      set({
+        likeError: error instanceof Error ? error.message : "Не удалось изменить лайк",
+      });
+      return;
+    }
 
     if (!res?.ok) {
       set({ likeError: res?.error ?? "Не удалось изменить лайк" });

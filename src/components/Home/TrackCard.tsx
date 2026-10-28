@@ -1,8 +1,10 @@
 import { useState } from "react";
-import { Play, MusicNotes } from "../../lib/icons";
+import { Play, MusicNotes, LinkSimple } from "../../lib/icons";
 import { SCTrack } from "../../types/soundcloud";
 import { usePlayerStore } from "../../stores/playerStore";
 import { logAction } from "../../lib/actionLog";
+import { showToast } from "../../stores/toastStore";
+import { trackUrl } from "../../lib/soundcloudLinks";
 import TrackMenu from "../Track/TrackMenu";
 
 interface Props {
@@ -31,6 +33,20 @@ export default function TrackCard({ track, queue }: Props) {
   const play = () => {
     const index = queue.findIndex((t) => t.id === track.id);
     usePlayerStore.getState().play(track, queue, Math.max(0, index));
+  };
+
+  /** Копирует ссылку на трек в буфер обмена. */
+  const copyLink = (e: React.MouseEvent) => {
+    e.stopPropagation();
+    const url = trackUrl(track);
+    if (!url) {
+      showToast({ title: "Ссылка недоступна", kind: "error", timeout: 3000 });
+      return;
+    }
+    logAction("card_copy_link", { id: track.id, url });
+    void navigator.clipboard?.writeText(url).then(() => {
+      showToast({ title: "Ссылка скопирована", kind: "success", timeout: 2500 });
+    });
   };
 
   return (
@@ -80,6 +96,14 @@ export default function TrackCard({ track, queue }: Props) {
             }}
           >
             <Play size={19} weight="fill" style={{ marginLeft: 2 }} />
+          </button>
+          <button
+            className="track-card-copy"
+            aria-label="Скопировать ссылку на трек"
+            title="Скопировать ссылку"
+            onClick={copyLink}
+          >
+            <LinkSimple size={14} />
           </button>
         </div>
         <div className="track-card-title">{track.title}</div>

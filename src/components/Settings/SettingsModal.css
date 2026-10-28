@@ -10,7 +10,12 @@
   padding: 40px 20px;
   background: rgba(0, 0, 0, 0.62);
   backdrop-filter: blur(4px);
-  animation: settings-fade 160ms ease;
+  animation: settings-fade 200ms cubic-bezier(0.22, 1, 0.36, 1);
+}
+
+/* Фаза закрытия: класс вешается перед размонтированием. */
+.settings-backdrop.closing {
+  animation: settings-fade-out 160ms cubic-bezier(0.4, 0, 1, 1) forwards;
 }
 
 @keyframes settings-fade {
@@ -19,6 +24,15 @@
   }
   to {
     opacity: 1;
+  }
+}
+
+@keyframes settings-fade-out {
+  from {
+    opacity: 1;
+  }
+  to {
+    opacity: 0;
   }
 }
 
@@ -34,17 +48,32 @@
   border: 1px solid var(--border-subtle);
   box-shadow: var(--shadow-lg);
   overflow: hidden;
-  animation: settings-rise 200ms ease;
+  animation: settings-rise 280ms cubic-bezier(0.22, 1, 0.36, 1);
+}
+
+.settings-backdrop.closing .settings-modal {
+  animation: settings-sink 180ms cubic-bezier(0.4, 0, 1, 1) forwards;
 }
 
 @keyframes settings-rise {
   from {
     opacity: 0;
-    transform: translateY(14px) scale(0.99);
+    transform: translateY(16px) scale(0.98);
   }
   to {
     opacity: 1;
     transform: none;
+  }
+}
+
+@keyframes settings-sink {
+  from {
+    opacity: 1;
+    transform: none;
+  }
+  to {
+    opacity: 0;
+    transform: translateY(10px) scale(0.99);
   }
 }
 
@@ -90,8 +119,8 @@
   text-align: left;
   cursor: pointer;
   transition:
-    background var(--transition-fast),
-    color var(--transition-fast);
+    background-color 220ms cubic-bezier(0.22, 1, 0.36, 1),
+    color 220ms cubic-bezier(0.22, 1, 0.36, 1);
 }
 
 .settings-tabs button:hover {
@@ -106,6 +135,7 @@
 
 .settings-tabs button.active .material-symbols-rounded {
   color: var(--accent);
+  transition: color 220ms cubic-bezier(0.22, 1, 0.36, 1);
 }
 
 .settings-content {
@@ -113,6 +143,34 @@
   min-width: 0;
   padding: 20px 24px 28px;
   overflow-y: auto;
+}
+
+/* Смена вкладки через View Transitions API: окно настроек морфится
+   в новую высоту (разные вкладки — разный контент), снимки окна
+   кроссфейдятся вместо резкой подмены. */
+.settings-modal {
+  view-transition-name: settings-modal;
+}
+
+::view-transition-group(settings-modal) {
+  /* Окно плавно скользит к новому размеру с фирменной кривой. */
+  animation-duration: 280ms;
+  animation-timing-function: cubic-bezier(0.22, 1, 0.36, 1);
+}
+
+::view-transition-old(settings-modal),
+::view-transition-new(settings-modal) {
+  /* Содержимое перетекает мягко, без лишней задержки. */
+  animation-duration: 220ms;
+  animation-timing-function: cubic-bezier(0.22, 1, 0.36, 1);
+  overflow: hidden;
+}
+
+/* При выключенных анимациях переход мгновенный. */
+.no-animations::view-transition-group(*),
+.no-animations::view-transition-old(*),
+.no-animations::view-transition-new(*) {
+  animation: none !important;
 }
 
 .settings-section {
@@ -173,7 +231,30 @@
   color: var(--text-secondary);
 }
 
-/* Переключатель */
+/* Контролы: средняя кнопка мыши — сброс к значению по умолчанию.
+   Курсор-перечёркивание и рамка при наведении подсказывают действие. */
+.settings-switch,
+.settings-segmented,
+.settings-range,
+.settings-select,
+.settings-theme-main,
+.settings-style-card,
+.settings-channel,
+.settings-input.port {
+  cursor: pointer;
+}
+
+.settings-switch:hover,
+.settings-segmented:hover,
+.settings-range:hover,
+.settings-select:hover,
+.settings-channel:hover {
+  outline: 1px dashed var(--border);
+  outline-offset: 3px;
+  border-radius: var(--radius-sm);
+}
+
+
 
 .settings-switch {
   position: relative;
@@ -185,7 +266,9 @@
   border-radius: var(--radius-full);
   background: var(--bg-active);
   cursor: pointer;
-  transition: background var(--transition-fast);
+  /* Фон и ползунок Switch переключаются пружинно: 260ms с плавным
+     выбегом, чтобы тумблер не «щёлкал», а перекатывался. */
+  transition: background-color 260ms cubic-bezier(0.22, 1, 0.36, 1);
 }
 
 .settings-switch.on {
@@ -200,7 +283,20 @@
   height: 18px;
   border-radius: 50%;
   background: #fff;
-  transition: transform var(--transition-fast);
+  box-shadow: 0 1px 3px rgba(0, 0, 0, 0.25);
+  transition:
+    transform 280ms cubic-bezier(0.34, 1.3, 0.5, 1),
+    width 180ms cubic-bezier(0.22, 1, 0.36, 1);
+}
+
+/* Зажатие: ползунок слегка вытягивается, как на iOS. */
+.settings-switch:active .settings-switch-knob {
+  width: 22px;
+}
+
+.settings-switch.on:active .settings-switch-knob {
+  /* При включённом состоянии вытяжка идёт влево, поэтому сдвигаем левый край. */
+  transform: translateX(14px);
 }
 
 .settings-switch.on .settings-switch-knob {
@@ -265,13 +361,19 @@
   font-weight: 600;
   cursor: pointer;
   transition:
-    background var(--transition-fast),
-    border-color var(--transition-fast);
+    background-color 220ms cubic-bezier(0.22, 1, 0.36, 1),
+    border-color 220ms cubic-bezier(0.22, 1, 0.36, 1),
+    color 220ms cubic-bezier(0.22, 1, 0.36, 1),
+    transform 160ms cubic-bezier(0.22, 1, 0.36, 1);
 }
 
 .settings-button:hover {
   background: var(--bg-hover);
   border-color: var(--accent);
+}
+
+.settings-button:active {
+  transform: scale(0.98);
 }
 
 .settings-button.small {
@@ -296,13 +398,18 @@
   color: var(--text-secondary);
   cursor: pointer;
   transition:
-    background var(--transition-fast),
-    color var(--transition-fast);
+    background-color 220ms cubic-bezier(0.22, 1, 0.36, 1),
+    color 220ms cubic-bezier(0.22, 1, 0.36, 1),
+    transform 160ms cubic-bezier(0.22, 1, 0.36, 1);
 }
 
 .settings-icon-btn:hover {
   background: var(--bg-hover);
   color: var(--text-primary);
+}
+
+.settings-icon-btn:active {
+  transform: scale(0.92);
 }
 
 .settings-segmented {
@@ -321,9 +428,16 @@
   font-size: 13px;
   font-weight: 600;
   cursor: pointer;
+  /* Сегмент не только красит фон, но и мягко «оседает» — лёгкий
+     масштаб вниз и обратно, как физическая кнопка. */
   transition:
-    background var(--transition-fast),
-    color var(--transition-fast);
+    background-color 240ms cubic-bezier(0.22, 1, 0.36, 1),
+    color 240ms cubic-bezier(0.22, 1, 0.36, 1),
+    transform 180ms cubic-bezier(0.22, 1, 0.36, 1);
+}
+
+.settings-segmented button:active {
+  transform: scale(0.96);
 }
 
 .settings-segmented button.active {
@@ -350,16 +464,24 @@
   cursor: pointer;
   text-align: left;
   transition:
-    border-color var(--transition-fast),
-    background var(--transition-fast);
+    border-color 240ms cubic-bezier(0.22, 1, 0.36, 1),
+    background-color 240ms cubic-bezier(0.22, 1, 0.36, 1),
+    transform 200ms cubic-bezier(0.22, 1, 0.36, 1),
+    box-shadow 240ms cubic-bezier(0.22, 1, 0.36, 1);
 }
 
 .settings-style-card:hover {
   border-color: var(--border);
+  transform: translateY(-1px);
+}
+
+.settings-style-card:active {
+  transform: translateY(0) scale(0.99);
 }
 
 .settings-style-card.active {
   border-color: var(--accent);
+  box-shadow: 0 0 0 1px var(--accent);
 }
 
 .settings-style-preview {
@@ -491,18 +613,26 @@
   font-weight: 600;
   cursor: pointer;
   transition:
-    border-color var(--transition-fast),
-    color var(--transition-fast);
+    border-color 240ms cubic-bezier(0.22, 1, 0.36, 1),
+    color 240ms cubic-bezier(0.22, 1, 0.36, 1),
+    background-color 240ms cubic-bezier(0.22, 1, 0.36, 1),
+    transform 200ms cubic-bezier(0.22, 1, 0.36, 1);
 }
 
 .settings-theme-card:hover {
   color: var(--text-primary);
   border-color: var(--border);
+  transform: translateY(-1px);
+}
+
+.settings-theme-card:active {
+  transform: translateY(0) scale(0.99);
 }
 
 .settings-theme-card.active {
   border-color: var(--accent);
   color: var(--text-primary);
+  box-shadow: 0 0 0 1px var(--accent);
 }
 
 .settings-theme-card.custom {
@@ -713,14 +843,19 @@
   letter-spacing: 0.04em;
   cursor: pointer;
   transition:
-    background var(--transition-fast),
-    color var(--transition-fast),
-    border-color var(--transition-fast);
+    background-color 240ms cubic-bezier(0.22, 1, 0.36, 1),
+    color 240ms cubic-bezier(0.22, 1, 0.36, 1),
+    border-color 240ms cubic-bezier(0.22, 1, 0.36, 1),
+    transform 180ms cubic-bezier(0.22, 1, 0.36, 1);
 }
 
 .settings-channel-item:hover {
   background: var(--bg-hover);
   color: var(--text-primary);
+}
+
+.settings-channel-item:active {
+  transform: scale(0.95);
 }
 
 .settings-channel-item.active {

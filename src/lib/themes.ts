@@ -90,6 +90,17 @@ export function applyTheme(themeId: string, customThemes: CustomTheme[]): void {
     ? customThemes.find((theme) => themeDataId(theme) === themeId)
     : undefined;
 
+  // На время смены темы включаем мягкий кроссфейд поверхностей,
+  // чтобы цвета перетекали, а не щёлкали. Класс снимается, когда
+  // анимация успевает отыграть (см. таймер ниже).
+  if (!root.classList.contains("no-animations")) {
+    root.classList.add("theme-fade");
+    window.clearTimeout(themeFadeTimer);
+    themeFadeTimer = window.setTimeout(() => {
+      root.classList.remove("theme-fade");
+    }, 340);
+  }
+
   if (!custom) {
     root.setAttribute("data-theme", themeId);
     ACCENT_VARS.forEach((property) => root.style.removeProperty(property));
@@ -106,6 +117,8 @@ export function applyTheme(themeId: string, customThemes: CustomTheme[]): void {
   );
   root.style.setProperty("--accent-text", readableTextColor(custom.accent));
 }
+
+let themeFadeTimer = 0;
 
 /** Основа темы: тёмная или светлая. Нужна, чтобы фон окна совпадал с фоном. */
 export function themeBase(

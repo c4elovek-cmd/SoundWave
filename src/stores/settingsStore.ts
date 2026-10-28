@@ -39,6 +39,11 @@ export interface SettingsValues {
   shuffleOnStart: boolean;
   repeatOnStart: RepeatSetting;
 
+  // Аудио-визуализатор в плеере
+  visualizerEnabled: boolean;
+  visualizerStyle: "bars" | "mirror" | "wave";
+  visualizerHeight: number;
+
   // Discord
   discordEnabled: boolean;
   discordClientId: string;
@@ -55,7 +60,7 @@ export interface SettingsValues {
   closeToTray: boolean;
 }
 
-const DEFAULTS: SettingsValues = {
+export const DEFAULTS: SettingsValues = {
   animations: true,
   density: "comfortable",
   style: "classic",
@@ -70,6 +75,10 @@ const DEFAULTS: SettingsValues = {
   volume: 0.8,
   shuffleOnStart: false,
   repeatOnStart: "off",
+
+  visualizerEnabled: false,
+  visualizerStyle: "bars",
+  visualizerHeight: 72,
 
   discordEnabled: true,
   discordClientId: "",
@@ -160,6 +169,9 @@ export const useSettingsStore = create<SettingsState>((set, get) => ({
       volume: state.volume,
       shuffleOnStart: state.shuffleOnStart,
       repeatOnStart: state.repeatOnStart,
+      visualizerEnabled: state.visualizerEnabled,
+      visualizerStyle: state.visualizerStyle,
+      visualizerHeight: state.visualizerHeight,
       discordEnabled: state.discordEnabled,
       discordClientId: state.discordClientId,
       discordLargeImage: state.discordLargeImage,

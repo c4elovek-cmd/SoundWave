@@ -15,6 +15,7 @@ import { useAppStore } from "../../stores/appStore";
 import { CustomTheme } from "../../lib/themes";
 import ThemeEditor from "../ThemeEditor/ThemeEditor";
 import ThemeMenu from "./ThemeMenu";
+import SoundWaveLogo from "../common/SoundWaveLogo";
 import "./Sidebar.css";
 
 export default function Sidebar() {
@@ -46,7 +47,9 @@ export default function Sidebar() {
     <aside className={`sidebar ${sidebarCollapsed ? "collapsed" : ""}`}>
       <div className="sidebar-header">
         <div className="logo" onClick={() => setView("home")} title="На главную">
-          <div className="logo-mark">S</div>
+          <div className="logo-mark">
+            <SoundWaveLogo size={32} />
+          </div>
           <span className="logo-text">SoundWave</span>
         </div>
         <button

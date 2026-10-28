@@ -113,14 +113,17 @@ async fn sc_write(
 }
 
 /// Лайк / снятие лайка трека.
+///
+/// Тот же путь, что использует веб-клиент SoundCloud:
+/// `PUT /users/{userId}/track_likes/{trackId}` — поставить,
+/// `DELETE` — снять. Документированный `POST /likes/tracks/{urn}`
+/// принимает только OAuth-клиентов из Dev Portal (403 для веб client_id).
 #[tauri::command]
 async fn toggle_like(
     state: State<'_, AppState>,
     track_id: u64,
     like: bool,
 ) -> Result<Value, String> {
-    let (cookie, token) = state.sc.session();
-
     let user_id = match state
         .sc
         .api(Method::GET, "/me", &[])
@@ -129,22 +132,35 @@ async fn toggle_like(
         .and_then(|me| me.get("id").and_then(|v| v.as_u64()))
     {
         Some(id) => id,
-        None => return Err("Нужен вход в аккаунт SoundCloud".to_string()),
+        None => return Ok(serde_json::json!({ "ok": false, "error": "Нужен вход в аккаунт SoundCloud" })),
     };
 
-    let urn = format!("soundcloud:system-playlists:personalized-tracks:{user_id}:{track_id}");
-    let path = format!("/users/{user_id}/system_playlist_likes/{urn}");
-
-    let params: Vec<(String, String)> = vec![
-        ("app_version".to_string(), "1792400581".to_string()),
-        ("app_locale".to_string(), "ru".to_string()),
-    ];
-
+    let path = format!("/users/{user_id}/track_likes/{track_id}");
     let method = if like { Method::PUT } else { Method::DELETE };
-    let _ = (cookie, token);
 
-    match state.sc.api(method, &path, &params).await {
-        Ok(_) => Ok(serde_json::json!({ "ok": true, "liked": like })),
+    // нужны client_id и полная URL-строка, как в api()
+    let client_id = match state.sc.client_id().await {
+        Ok(id) => id,
+        Err(err) => return Ok(serde_json::json!({ "ok": false, "error": err })),
+    };
+    let mut url = match reqwest::Url::parse(&format!("{}{}", soundcloud::API_V2, path)) {
+        Ok(u) => u,
+        Err(err) => return Ok(serde_json::json!({ "ok": false, "error": err.to_string() })),
+    };
+    url.query_pairs_mut().append_pair("client_id", &client_id);
+
+    // Тело PUT/DELETE — «OK»/«{}», успех проверяем по статусу.
+    match state.sc.send_with_retry(method, url).await {
+        Ok((status, _)) if status.is_success() => {
+            Ok(serde_json::json!({ "ok": true, "liked": like }))
+        }
+        Ok((status, body)) => {
+            let snippet: String = body.chars().take(160).collect();
+            Ok(serde_json::json!({
+                "ok": false,
+                "error": format!("SoundCloud API вернул ошибку {status} ({snippet})"),
+            }))
+        }
         Err(err) => Ok(serde_json::json!({ "ok": false, "error": err })),
     }
 }
@@ -683,8 +699,8 @@ fn logout(app: AppHandle, state: State<'_, AppState>) -> Result<bool, String> {
 
 /// Текст песни: Genius, при неудаче — LRCLIB.
 #[tauri::command]
-async fn get_lyrics(title: String, artist: String, description: String) -> Value {
-    let result = lyrics::get_lyrics(&title, &artist, &description).await;
+async fn get_lyrics(title: String, artist: String, description: String, duration: Option<f64>) -> Value {
+    let result = lyrics::get_lyrics(&title, &artist, &description, duration.unwrap_or(0.0)).await;
     serde_json::to_value(result).unwrap_or(Value::Null)
 }
 
@@ -1212,7 +1228,24 @@ async fn check_for_updates(app: AppHandle) -> Value {
 async fn install_update(app: AppHandle) -> Value {
     use tauri_plugin_updater::UpdaterExt;
 
-    let updater = match app.updater() {
+    // Тот же канал, что и у проверки: иначе beta-сборка проверяла бы одну
+    // ленту, а ставила релиз из stable.
+    let channel = update_channel();
+    let endpoint = channel_endpoint(&channel);
+
+    let updater = match app
+        .updater_builder()
+        .endpoints(match reqwest::Url::parse(&endpoint) {
+            Ok(url) => vec![url],
+            Err(e) => {
+                return serde_json::json!({
+                    "ok": false,
+                    "error": format!("Неверный адрес обновлений: {e}"),
+                })
+            }
+        })
+        .and_then(|builder| builder.build())
+    {
         Ok(updater) => updater,
         Err(e) => {
             return serde_json::json!({
