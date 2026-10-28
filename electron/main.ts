@@ -1638,6 +1638,36 @@ async function getSyncedLyrics(
       }
     }
 
+    // Fallback: Lrcmux — агрегатор с word-level (Enhanced LRC) караоке.
+    if (!best) {
+      try {
+        const url =
+          `https://api.lrcmux.dev/get?artist=${encodeURIComponent(artist)}` +
+          `&title=${encodeURIComponent(title)}` +
+          `&format=lrc&level=word`;
+        const res = await fetch(url, {
+          headers: { "User-Agent": LRCLIB_UA },
+          signal: AbortSignal.timeout(LRCLIB_TIMEOUT),
+        });
+        if (res.ok) {
+          const body = await res.text();
+          if (body.trim().length > 20) {
+            best = {
+              entry: {
+                syncedLyrics: body,
+                trackName: title,
+                artistName: artist,
+                duration: durationMs / 1000,
+              },
+              score: 8,
+            };
+          }
+        }
+      } catch (e) {
+        log.warn("Lrcmux: не удалось получить синхронизацию", e);
+      }
+    }
+
     if (best && best.score >= 6) {
       result = {
         found: true,

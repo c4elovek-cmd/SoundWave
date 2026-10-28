@@ -1695,6 +1695,36 @@ pub async fn get_synced_lyrics(title: &str, artist: &str, duration_ms: f64) -> S
         }
     }
 
+    // Fallback: Lrcmux — агрегатор с word-level (Enhanced LRC) караоке.
+    if best.is_none() {
+        let url = format!(
+            "https://api.lrcmux.dev/get?artist={}&title={}&format=lrc&level=word",
+            encode_uri_component(artist),
+            encode_uri_component(title)
+        );
+        if let Ok(response) = HTTP
+            .get(&url)
+            .header("User-Agent", LRCLIB_UA)
+            .timeout(KARALYR_TIMEOUT)
+            .send()
+            .await
+        {
+            if response.status().is_success() {
+                if let Ok(body) = response.text().await {
+                    if body.trim().chars().count() > 20 {
+                        let entry = serde_json::json!({
+                            "syncedLyrics": body,
+                            "trackName": title,
+                            "artistName": artist,
+                            "duration": (duration_ms / 1000.0)
+                        });
+                        best = Some((8.0, entry));
+                    }
+                }
+            }
+        }
+    }
+
     let result = match best {
         Some((score, entry)) if score >= 6.0 => SyncedLyrics {
             found: true,
