@@ -34,6 +34,8 @@ export default function LyricsPanel() {
   const font = useSettingsStore((s) => s.lyricsFont);
   const fontSize = useSettingsStore((s) => s.lyricsFontSize);
   const exactSync = useSettingsStore((s) => s.exactSync);
+  const karaokeOffsetMs = useSettingsStore((s) => s.karaokeOffsetMs);
+  const karaokeMode = useSettingsStore((s) => s.karaokeMode);
   const customFonts = useSettingsStore((s) => s.customFonts);
   const setSetting = useSettingsStore((s) => s.set);
 
@@ -91,7 +93,7 @@ export default function LyricsPanel() {
     let raf = 0;
     const tick = () => {
       const audio = usePlayerStore.getState().audio;
-      const time = audio?.currentTime ?? 0;
+      const time = (audio?.currentTime ?? 0) - karaokeOffsetMs / 1000;
       const next = findActiveLine(timedLines, time);
       setActiveLine((prev) => (prev === next ? prev : next));
 
@@ -101,7 +103,7 @@ export default function LyricsPanel() {
       const body = bodyRef.current;
       if (body) {
         const progress = lineProgress(timedLines, next, time);
-        paintKaraokeWords(body, progress);
+        paintKaraokeWords(body, progress, karaokeMode);
       }
 
       raf = requestAnimationFrame(tick);
@@ -109,7 +111,7 @@ export default function LyricsPanel() {
 
     raf = requestAnimationFrame(tick);
     return () => cancelAnimationFrame(raf);
-  }, [karaokeActive, timedLines]);
+  }, [karaokeActive, timedLines, karaokeOffsetMs, karaokeMode]);
 
   // Автопрокрутка к активной строке.
   useEffect(() => {

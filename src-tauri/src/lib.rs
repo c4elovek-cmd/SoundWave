@@ -1819,6 +1819,15 @@ pub fn run() {
         .plugin(tauri_plugin_global_shortcut::Builder::new().build())
         .plugin(tauri_plugin_updater::Builder::new().build())
         .plugin(tauri_plugin_log::Builder::new().build())
+        // Один экземпляр: повторный запуск просто показывает существующее
+        // окно (включая восстановление из трея), а не открывает второе.
+        .plugin(tauri_plugin_single_instance::init(|app, _args, _cwd| {
+            if let Some(win) = app.get_webview_window("main") {
+                let _ = win.unminimize();
+                let _ = win.show();
+                let _ = win.set_focus();
+            }
+        }))
         .manage(AppState {
             sc: SoundCloud::new(),
             token_before_login: std::sync::Mutex::new(None),

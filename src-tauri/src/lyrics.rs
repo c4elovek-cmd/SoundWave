@@ -260,6 +260,112 @@ fn translit_ru(value: &str) -> String {
     }
 }
 
+/// Число 0..999 словами: «4» → «четыре», «30» → «тридцать».
+fn spell_number_ru(part: &str) -> Option<String> {
+    const UNITS: [&str; 10] = [
+        "ноль", "один", "два", "три", "четыре", "пять", "шесть", "семь", "восемь", "девять",
+    ];
+    const TEENS: [&str; 10] = [
+        "десять",
+        "одиннадцать",
+        "двенадцать",
+        "тринадцать",
+        "четырнадцать",
+        "пятнадцать",
+        "шестнадцать",
+        "семнадцать",
+        "восемнадцать",
+        "девятнадцать",
+    ];
+    const TENS: [&str; 10] = [
+        "", "", "двадцать", "тридцать", "сорок", "пятьдесят", "шестьдесят", "семьдесят",
+        "восемьдесят", "девяносто",
+    ];
+    const HUNDREDS: [&str; 10] = [
+        "", "сто", "двести", "триста", "четыреста", "пятьсот", "шестьсот", "семьсот",
+        "восемьсот", "девятьсот",
+    ];
+
+    let value: u32 = part.parse().ok()?;
+    if value > 999 {
+        return None;
+    }
+
+    let mut out: Vec<&str> = Vec::new();
+    let hundreds = (value / 100) as usize;
+    let rest = (value % 100) as usize;
+    if hundreds > 0 {
+        out.push(HUNDREDS[hundreds]);
+    }
+    if (10..20).contains(&rest) {
+        out.push(TEENS[rest - 10]);
+    } else {
+        let tens = rest / 10;
+        let units = rest % 10;
+        if tens > 0 {
+            out.push(TENS[tens]);
+        }
+        if units > 0 || out.is_empty() {
+            out.push(UNITS[units]);
+        }
+    }
+
+    Some(out.join(" "))
+}
+
+/// «4.30», «4:30», «4-30» → «четыре тридцать»; одиночное число — тоже.
+///
+/// Название-число не совпадает с записанным словами («4 30» против «четыре
+/// тридцать») ни по одному слову, поэтому запись оригинала («Четыре тридцать»
+/// Violetta Sokolova для ремикса «4.30 (hardstyle remix)») не находилась вовсе.
+fn spelled_number_variant(title: &str) -> Option<String> {
+    let normalized = normalize_text(title);
+    let mut parts: Vec<&str> = Vec::new();
+
+    for word in normalized.split(' ') {
+        if word.chars().all(|c| c.is_ascii_digit()) {
+            parts.push(word);
+            if parts.len() == 2 {
+                break;
+            }
+        } else {
+            break;
+        }
+    }
+
+    if parts.is_empty() {
+        return None;
+    }
+
+    let mut words: Vec<String> = Vec::new();
+    for part in &parts {
+        words.push(spell_number_ru(part)?);
+    }
+
+    let spelled = words.join(" ");
+    let digits = parts.join(" ");
+    if spelled == digits {
+        return None;
+    }
+    Some(spelled)
+}
+
+/// Та же песня, если название записи — это число из нашего названия словами.
+///
+/// «4.30 (hardstyle remix)» и «Четыре тридцать» — одна песня, хотя общих слов
+/// нет. Считаем эквивалент только по числу в начале названия: ремикс того же
+/// трека обычно сохраняет и текст, и структуру.
+fn numeral_equivalent(want_title: &str, track_title: &str) -> bool {
+    let Some(spelled) = spelled_number_variant(want_title) else {
+        return false;
+    };
+    let track = normalize_text(track_title);
+    // Только точное совпадение: «Четыре тридцать» ✓, «Четыре тридцать
+    // (Four Thirty)» после нормализации тоже точное. Префикс «восемь» из
+    // «8 миля» не должен ловить чужую «Восемь миля».
+    !track.is_empty() && track == spelled
+}
+
 /// Декодирует HTML-сущности, которые Genius использует в текстах.
 pub fn decode_html_entities(text: &str) -> String {
     let text = RE_HEX_ENTITY.replace_all(text, |caps: &regex::Captures| {
@@ -434,6 +540,15 @@ pub fn title_variants(title: &str) -> Vec<String> {
     // «ANGUISH — Krasavitsa (Remix)». Вариант добавляем в конец, чтобы он не
     // отнимал место у обычных запросов.
     drop(add);
+
+    // «4.30» → «четыре тридцать»: на LRCLIB и Genius такие песни лежат под
+    // названием словами, и без этого варианта оригинал не находится вовсе.
+    if let Some(spelled) = spelled_number_variant(title) {
+        let trimmed = spelled.trim();
+        if trimmed.chars().count() > 1 && !variants.iter().any(|v| v == trimmed) {
+            variants.push(trimmed.to_string());
+        }
+    }
 
     let transliterated: Vec<String> = variants
         .iter()
@@ -708,6 +823,10 @@ fn artist_names_match(left: &str, right: &str) -> bool {
 
 /// Насколько результат поиска похож на нужный трек.
 fn score_genius_song(song: &Value, titles: &[String], artists: &[String]) -> i32 {
+    let raw_song_title = song
+        .get("title")
+        .and_then(|v| v.as_str())
+        .unwrap_or("");
     let raw_song_artist = song
         .get("primary_artist")
         .and_then(|a| a.get("name"))
@@ -819,11 +938,22 @@ fn score_genius_song(song: &Value, titles: &[String], artists: &[String]) -> i32
     // чем любого по отдельности. Раньше брался максимум, и чужая песня с
     // точным названием весила столько же, сколько верная пара «название +
     // артист», а при равном счёте побеждала та, что попалась раньше.
-    let title_best = want_titles
-        .iter()
-        .map(|want_title| title_score(want_title))
-        .max()
-        .unwrap_or(0);
+    // «4.30 (hardstyle remix)» и «Четыре тридцать (Four Thirty)» — одна
+    // песня: число на Genius записано словами.
+    let numeral_eq = titles
+        .first()
+        .map(|t| numeral_equivalent(t, raw_song_title))
+        .unwrap_or(false);
+
+    let title_best = if numeral_eq {
+        10
+    } else {
+        want_titles
+            .iter()
+            .map(|want_title| title_score(want_title))
+            .max()
+            .unwrap_or(0)
+    };
     let artist_best = artists.iter().map(|a| artist_score(a)).max().unwrap_or(0);
     let mut score = title_best + artist_best;
 
@@ -884,6 +1014,7 @@ fn score_genius_song(song: &Value, titles: &[String], artists: &[String]) -> i32
     // где в теге загрузчика стоит ник, а настоящий исполнитель в названии.
     let artist_confident = artist_matched
         || artist_named_in_title
+        || numeral_eq
         || (title_artist.is_some() && artist_consistent);
 
     if !artist_confident {
@@ -1143,6 +1274,59 @@ pub async fn get_lyrics(title: &str, artist: &str, description: &str, duration_m
     result
 }
 
+/// Есть ли в теле LRC хотя бы одна метка времени строки.
+///
+/// Lrcmux умеет отдавать текст без таймингов: у песни просто нет разметки.
+/// Такой ответ нельзя считать синхронизацией — разбор даёт ноль строк, и
+/// караоке остаётся пустым, хотя текст найден.
+fn has_lrc_timestamps(body: &str) -> bool {
+    body.lines().any(|line| {
+        let Some(rest) = line.trim_start().strip_prefix('[') else {
+            return false;
+        };
+        let Some(end) = rest.find(']') else {
+            return false;
+        };
+        let inside = &rest[..end];
+        inside.contains(':')
+            && inside
+                .chars()
+                .all(|c| c.is_ascii_digit() || c == ':' || c == '.')
+    })
+}
+
+/// Снимает с LRC метки времени строк и слов — остаётся чистый текст.
+fn strip_lrc_timestamps(body: &str) -> String {
+    let mut out: Vec<String> = Vec::new();
+
+    for line in body.lines() {
+        let mut rest = line.trim_start();
+        while rest.starts_with('[') {
+            let Some(end) = rest.find(']') else { break };
+            rest = rest[end + 1..].trim_start();
+        }
+
+        // Метки слов в Enhanced LRC выглядят как «<00:12.34>».
+        let mut cleaned = String::with_capacity(rest.len());
+        let mut in_tag = false;
+        for ch in rest.chars() {
+            match ch {
+                '<' => in_tag = true,
+                '>' => in_tag = false,
+                _ if !in_tag => cleaned.push(ch),
+                _ => {}
+            }
+        }
+
+        let cleaned = cleaned.trim();
+        if !cleaned.is_empty() {
+            out.push(cleaned.to_string());
+        }
+    }
+
+    out.join("\n")
+}
+
 /// Запасной источник текста — LRCLIB.
 async fn get_lrclib_plain_lyrics(title: &str, artist: &str, duration_ms: f64) -> PlainLyrics {
     let cache_key = format!(
@@ -1281,6 +1465,40 @@ async fn get_lrclib_plain_lyrics(title: &str, artist: &str, duration_ms: f64) ->
         }
     }
 
+    // Fallback: Lrcmux — тот же агрегатор, что даёт караоке. Умеет отдавать и
+    // обычный текст, когда на LRCLIB записи нет вовсе. Ищем по паре «артист +
+    // название»: Lrcmux находит перезаливы, где в теге стоит ник загрузившего
+    // («lightprey»), а на странице указан настоящий исполнитель.
+    if best.is_none() {
+        let url = format!(
+            "https://api.lrcmux.dev/get?artist={}&title={}&format=lrc",
+            encode_uri_component(artist),
+            encode_uri_component(title)
+        );
+        if let Ok(response) = HTTP
+            .get(&url)
+            .header("User-Agent", LRCLIB_UA)
+            .timeout(KARALYR_TIMEOUT)
+            .send()
+            .await
+        {
+            if response.status().is_success() {
+                if let Ok(body) = response.text().await {
+                    let plain = strip_lrc_timestamps(&body);
+                    if plain.trim().chars().count() >= 80 {
+                        let entry = serde_json::json!({
+                            "plainLyrics": plain,
+                            "trackName": title,
+                            "artistName": artist,
+                            "duration": (duration_ms / 1000.0)
+                        });
+                        best = Some((8.0, entry));
+                    }
+                }
+            }
+        }
+    }
+
     let result = match best {
         Some((score, entry)) if score >= 4.0 => PlainLyrics {
             found: true,
@@ -1358,6 +1576,11 @@ fn lrc_title_matches(entry: &Value, title: &str) -> bool {
 
     if want.is_empty() || track.is_empty() {
         return false;
+    }
+
+    // «4.30 (hardstyle remix)» и «Четыре тридцать» — одна песня.
+    if numeral_equivalent(title, entry.get("trackName").and_then(|v| v.as_str()).unwrap_or("")) {
+        return true;
     }
 
     if track == want || track.contains(&want) || want.contains(&track) {
@@ -1471,7 +1694,11 @@ fn score_lrc_track(entry: &Value, title: &str, artist: &str, duration_ms: f64) -
 
     let mut score = 0.0f32;
 
-    if track_title == want_title {
+    // Число словами («4.30» и «Четыре тридцать») — то же название: это
+    // сильнее любой частичной похожести.
+    let numeral_eq = numeral_equivalent(title, entry.get("trackName").and_then(|v| v.as_str()).unwrap_or(""));
+
+    if numeral_eq || track_title == want_title {
         score += 10.0;
     } else if track_title.contains(&want_title) || want_title.contains(&track_title) {
         score += 6.0;
@@ -1536,7 +1763,9 @@ fn score_lrc_track(entry: &Value, title: &str, artist: &str, duration_ms: f64) -
     //  * Многословное и уникальное название («ВЫЗВАЛ ШЛЮХУ x mylancore»)
     //    пропускаем: перезаливы и ремиксы часто отличаются по длительности.
     let single_word_title = want_title.split(' ').filter(|w| !w.is_empty()).count() < 2;
-    if !lrc_artist_matches(entry, title, artist) {
+    // Число словами — это то же название, чужой артист записи его не
+    // перекрывает: ремикс перезаливает другой ник, а исполнитель настоящий.
+    if !numeral_eq && !lrc_artist_matches(entry, title, artist) {
         let weak_title = lrc_title_coverage(entry, title) <= 0.5;
 
         if weak_title || single_word_title {
@@ -1636,12 +1865,16 @@ pub async fn get_synced_lyrics(title: &str, artist: &str, duration_ms: f64) -> S
 
                 // Ремикс/версия: если в названии трека есть маркер версии
                 // (remix, mix, …), а у записи LRCLIB его нет — это другая
-                // песня с другими словами, тайминги не подойдут.
+                // песня с другими словами, тайминги не подойдут. Исключение —
+                // когда запись узнали по числу словами («4.30» и «Четыре
+                // тридцать»): это точно тот же трек, только ремикс.
                 let track_name = entry
                     .get("trackName")
                     .and_then(|v| v.as_str())
                     .unwrap_or("");
-                if !version_markers_compatible(title, track_name) {
+                if !numeral_equivalent(title, track_name)
+                    && !version_markers_compatible(title, track_name)
+                {
                     continue;
                 }
 
@@ -1711,7 +1944,7 @@ pub async fn get_synced_lyrics(title: &str, artist: &str, duration_ms: f64) -> S
         {
             if response.status().is_success() {
                 if let Ok(body) = response.text().await {
-                    if body.trim().chars().count() > 20 {
+                    if body.trim().chars().count() > 20 && has_lrc_timestamps(&body) {
                         let entry = serde_json::json!({
                             "syncedLyrics": body,
                             "trackName": title,
@@ -2339,6 +2572,56 @@ mod tests {
             !version_markers_compatible("8 миля (вайбкодер remix)", "8 миля"),
             "маркер версии несовместим, но функция пропустила"
         );
+        // «восемь» — не эквивалент «8 миля»: число не занимает название целиком.
+        assert!(
+            !numeral_equivalent("8 миля (вайбкодер remix)", "8 миля"),
+            "числительное не должно делать чужой ремикс «своим»"
+        );
+    }
+
+    #[test]
+    fn spells_number_title_for_search() {
+        // «4.30 (hardstyle remix)» — это ремикс «Четыре тридцать» Violetta
+        // Sokolova. Без варианта словами запись не находится ни по одному
+        // слову: цифры и слова не пересекаются.
+        let spelled = spelled_number_variant("4.30 (hardstyle remix) by rxvxngxr_");
+        assert_eq!(spelled.as_deref(), Some("четыре тридцать"));
+
+        let titles = title_variants("4.30 (hardstyle remix) by rxvxngxr_");
+        assert!(
+            titles.iter().any(|t| t == "четыре тридцать"),
+            "нет варианта словами: {titles:?}"
+        );
+    }
+
+    #[test]
+    fn accepts_original_of_number_titled_remix() {
+        // Запись оригинала: название словами, артист другой (ремикс залил
+        // rxvxngxr_), длительность совпадает с ремиксом. Такая запись должна
+        // проходить и для текста (порог 4), и для караоке (порог 6).
+        let entry = serde_json::json!({
+            "trackName": "Четыре тридцать",
+            "artistName": "Violetta Sokolova",
+            "duration": 136.0
+        });
+        let title = "4.30 (hardstyle remix) by rxvxngxr_";
+        let artist = "rxvxngxr_";
+
+        assert!(
+            lrc_title_matches(&entry, title),
+            "число словами должно узнаваться в шлюзе названия"
+        );
+        let score = score_lrc_track(&entry, title, artist, 136_000.0);
+        assert!(score >= 6.0, "оригинал ремикса должен проходить, получили {score}");
+    }
+
+    #[test]
+    fn number_equivalence_needs_full_number() {
+        // «восемь» из «8 миля» не делает чужую запись своей: эквивалентность
+        // работает, только когда число — само название.
+        assert!(!numeral_equivalent("8 миля (вайбкодер remix)", "Восемь миля"));
+        assert!(numeral_equivalent("4:30", "Четыре тридцать (Four Thirty)"));
+        assert!(!numeral_equivalent("улица 8", "восемь"));
     }
 
     #[test]

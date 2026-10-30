@@ -545,6 +545,42 @@ export default function SettingsModal() {
               </Row>
 
               <Row
+                label="Подсветка в караоке"
+                hint="По буквам: заливка идёт внутри слова, время букв оценивается приблизительно. По словам: слово загорается целиком и остаётся подсвеченным"
+              >
+                <div
+                  className="settings-segmented"
+                  {...middleReset("Подсветка в караоке", "karaokeMode")}
+                >
+                  {(["letters", "words"] as const).map((value) => (
+                    <button
+                      key={value}
+                      className={settings.karaokeMode === value ? "active" : ""}
+                      onClick={() => setSetting("karaokeMode", value)}
+                    >
+                      {value === "letters" ? "По буквам" : "По словам"}
+                    </button>
+                  ))}
+                </div>
+              </Row>
+
+              <Row
+                label={`Сдвиг караоке — ${settings.karaokeOffsetMs > 0 ? "+" : ""}${settings.karaokeOffsetMs} мс`}
+                hint="Минус — подсветка раньше, плюс — позже. Общая поправка для всех треков"
+              >
+                <input
+                  type="range"
+                  className="settings-range"
+                  min={-3000}
+                  max={3000}
+                  step={50}
+                  value={settings.karaokeOffsetMs}
+                  onChange={(e) => setSetting("karaokeOffsetMs", Number(e.target.value))}
+                  {...middleReset("Сдвиг караоке", "karaokeOffsetMs")}
+                />
+              </Row>
+
+              <Row
                 label="Всегда искать точную синхронизацию"
                 hint="Запрос к LRCLIB даже без режима караоке"
               >

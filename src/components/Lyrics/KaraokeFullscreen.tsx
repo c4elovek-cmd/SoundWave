@@ -46,6 +46,8 @@ export default function KaraokeFullscreen() {
   const lyricsFont = useSettingsStore((s) => s.lyricsFont);
   const customFonts = useSettingsStore((s) => s.customFonts);
   const fontSize = useSettingsStore((s) => s.karaokeFontSize);
+  const karaokeOffsetMs = useSettingsStore((s) => s.karaokeOffsetMs);
+  const karaokeMode = useSettingsStore((s) => s.karaokeMode);
   const setSetting = useSettingsStore((s) => s.set);
 
   const fillRef = useRef<HTMLDivElement>(null);
@@ -106,7 +108,7 @@ export default function KaraokeFullscreen() {
     const tick = () => {
       const state = usePlayerStore.getState();
       const audio = state.audio;
-      const time = audio?.currentTime ?? 0;
+      const time = (audio?.currentTime ?? 0) - karaokeOffsetMs / 1000;
       const total =
         audio?.duration && Number.isFinite(audio.duration)
           ? audio.duration
@@ -130,7 +132,7 @@ export default function KaraokeFullscreen() {
         // визуальных строк, заливалась бы вся сразу.
         if (linesRef.current) {
           const progress = lineProgress(timedLines, nextLine, time);
-          paintKaraokeWords(linesRef.current, progress);
+          paintKaraokeWords(linesRef.current, progress, karaokeMode);
         }
       }
 
@@ -139,7 +141,7 @@ export default function KaraokeFullscreen() {
 
     raf = requestAnimationFrame(tick);
     return () => cancelAnimationFrame(raf);
-  }, [timedLines]);
+  }, [timedLines, karaokeOffsetMs, karaokeMode]);
 
   const handleClose = useCallback(() => {
     if (fullscreen) void window.electronAPI?.setFullscreen(false);

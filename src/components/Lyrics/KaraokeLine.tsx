@@ -76,7 +76,11 @@ const paintCache = new WeakMap<HTMLElement, PaintCache>();
  * (60 раз в секунду) незачем. Кэш сбрасывается, когда React заменяет
  * элементы строки или снимает с неё класс активности.
  */
-export function paintKaraokeWords(root: HTMLElement | null, progress: number): void {
+export function paintKaraokeWords(
+  root: HTMLElement | null,
+  progress: number,
+  mode: "letters" | "words" = "letters"
+): void {
   if (!root) return;
 
   let cache = paintCache.get(root);
@@ -104,7 +108,18 @@ export function paintKaraokeWords(root: HTMLElement | null, progress: number): v
     const from = Number(word.dataset.from ?? 0);
     const to = Number(word.dataset.to ?? 1);
     const span = Math.max(0.0001, to - from);
-    const local = Math.min(1, Math.max(0, (progress - from) / span));
+
+    // По словам: слово загорается целиком, когда до него дошла очередь,
+    // и остаётся подсвеченным до конца строки.
+    // По буквам: заливка идёт внутри слова плавно — точность приблизительная,
+    // потому что время букв оценивается по длине слова.
+    const local =
+      mode === "words"
+        ? progress >= from
+          ? 1
+          : 0
+        : Math.min(1, Math.max(0, (progress - from) / span));
+
     word.style.setProperty("--word-fill", `${(local * 100).toFixed(1)}%`);
   }
 }

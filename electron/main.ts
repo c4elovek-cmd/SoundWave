@@ -703,6 +703,77 @@ function translitRu(value: string): string {
   return changed ? result : value;
 }
 
+/** Число 0..999 словами: «4» → «четыре», «30» → «тридцать». */
+function spellNumberRu(part: string): string | null {
+  const units = ["ноль", "один", "два", "три", "четыре", "пять", "шесть", "семь", "восемь", "девять"];
+  const teens = [
+    "десять", "одиннадцать", "двенадцать", "тринадцать", "четырнадцать",
+    "пятнадцать", "шестнадцать", "семнадцать", "восемнадцать", "девятнадцать",
+  ];
+  const tens = ["", "", "двадцать", "тридцать", "сорок", "пятьдесят", "шестьдесят", "семьдесят", "восемьдесят", "девяносто"];
+  const hundreds = ["", "сто", "двести", "триста", "четыреста", "пятьсот", "шестьсот", "семьсот", "восемьсот", "девятьсот"];
+
+  if (!/^\d{1,3}$/.test(part)) return null;
+  const value = Number(part);
+  const out: string[] = [];
+  const h = Math.floor(value / 100);
+  const rest = value % 100;
+  if (h > 0) out.push(hundreds[h]);
+  if (rest >= 10 && rest < 20) {
+    out.push(teens[rest - 10]);
+  } else {
+    const t = Math.floor(rest / 10);
+    const u = rest % 10;
+    if (t > 0) out.push(tens[t]);
+    if (u > 0 || out.length === 0) out.push(units[u]);
+  }
+  return out.join(" ");
+}
+
+/**
+ * «4.30», «4:30», «4-30» → «четыре тридцать»; одиночное число — тоже.
+ *
+ * Название-число не совпадает с записанным словами («4 30» против «четыре
+ * тридцать») ни по одному слову, поэтому запись оригинала («Четыре тридцать»
+ * Violetta Sokolova для ремикса «4.30 (hardstyle remix)») не находилась вовсе.
+ */
+function spelledNumberVariant(title: string): string | null {
+  const normalized = normalizeGeniusText(title);
+  const parts: string[] = [];
+
+  for (const word of normalized.split(" ")) {
+    if (/^\d+$/.test(word)) {
+      parts.push(word);
+      if (parts.length === 2) break;
+    } else {
+      break;
+    }
+  }
+
+  if (parts.length === 0) return null;
+
+  const words: string[] = [];
+  for (const part of parts) {
+    const spelled = spellNumberRu(part);
+    if (spelled === null) return null;
+    words.push(spelled);
+  }
+
+  const spelled = words.join(" ");
+  const digits = parts.join(" ");
+  return spelled === digits ? null : spelled;
+}
+
+/** Та же песня, если название записи — это число из нашего названия словами. */
+function numeralEquivalent(wantTitle: string, trackTitle: string): boolean {
+  const spelled = spelledNumberVariant(wantTitle);
+  if (spelled === null) return false;
+  const track = normalizeGeniusText(trackTitle);
+  // Только точное совпадение: префикс «восемь» из «8 миля» не должен ловить
+  // чужую «Восемь миля», а скобочные дополнения нормализация срезает.
+  return track.length > 0 && track === spelled;
+}
+
 /** Варианты названия: исходное, очищенное, часть после тире и без хвоста. */
 function titleVariants(title: string): string[] {
   const variants = new Set<string>();
@@ -757,6 +828,11 @@ function titleVariants(title: string): string[] {
       if (word.replace(/[^\p{L}\p{N}]/gu, "").length >= 4) add(word);
     }
   }
+
+  // «4.30» → «четыре тридцать»: на LRCLIB и Genius такие песни лежат под
+  // названием словами, и без этого варианта оригинал не находится вовсе.
+  const spelled = spelledNumberVariant(title);
+  if (spelled !== null) add(spelled);
 
   // Транслитерация кириллицы: «Anguish - Красавица» на Genius лежит как
   // «ANGUISH — Krasavitsa (Remix)». Вариант добавляем в конец, чтобы он не
@@ -1025,10 +1101,12 @@ function scoreGeniusSong(
   // чем любого по отдельности. Раньше брался максимум, и чужая песня с
   // точным названием весила столько же, сколько верная пара «название +
   // артист», а при равном счёте побеждала та, что попалась раньше.
-  const titleBest = wantTitles.reduce(
-    (best, wantTitle) => Math.max(best, titleScore(wantTitle)),
-    0
-  );
+  // «4.30 (hardstyle remix)» и «Четыре тридцать (Four Thirty)» — одна
+  // песня: число на Genius записано словами.
+  const numeralEq = numeralEquivalent(titles[0] ?? "", song?.title);
+  const titleBest = numeralEq
+    ? 10
+    : wantTitles.reduce((best, wantTitle) => Math.max(best, titleScore(wantTitle)), 0);
   const artistBest = artists.reduce(
     (best, wantArtist) => Math.max(best, artistScore(wantArtist)),
     0
@@ -1082,6 +1160,7 @@ function scoreGeniusSong(
   // где в теге загрузчика стоит ник, а настоящий исполнитель в названии.
   const artistConfident = artistMatched ||
     artistNamedInTitle ||
+    numeralEq ||
     (Boolean(titleArtist) && artistConsistent);
 
   if (!artistConfident) {
@@ -1258,6 +1337,34 @@ const LRCLIB_UA = "SoundWave/0.1 (https://github.com/c4elovek-cmd/SoundWave)";
 const LRCLIB_TIMEOUT = 10_000;
 const KARALYR_API = "https://karalyr.com/api/get";
 const KARALYR_TIMEOUT = 10_000;
+const LRCMUX_API = "https://api.lrcmux.dev/get";
+
+/**
+ * Есть ли в теле LRC хотя бы одна метка времени строки.
+ *
+ * Lrcmux умеет отдавать текст без таймингов: у песни просто нет разметки.
+ * Такой ответ нельзя считать синхронизацией — разбор даёт ноль строк, и
+ * караоке остаётся пустым, хотя текст найден.
+ */
+function hasLrcTimestamps(body: string): boolean {
+  return body.split(/\r?\n/).some((line) => {
+    const m = /^\s*\[([^\]]*)\]/.exec(line);
+    if (!m) return false;
+    return m[1].includes(":") && /^[\d:.]+$/.test(m[1]);
+  });
+}
+
+/** Снимает с LRC метки времени строк и слов — остаётся чистый текст. */
+function stripLrcTimestamps(body: string): string {
+  const out: string[] = [];
+  for (const line of body.split(/\r?\n/)) {
+    const withoutLineTags = line.replace(/^\s*(?:\[[^\]]*\]\s*)+/, "");
+    const withoutWordTags = withoutLineTags.replace(/<[^>]*>/g, "");
+    const cleaned = withoutWordTags.trim();
+    if (cleaned) out.push(cleaned);
+  }
+  return out.join("\n");
+}
 const LRCLIB_CACHE_TTL = 6 * 60 * 60 * 1000;
 const LRCLIB_CACHE_LIMIT = 200;
 
@@ -1347,7 +1454,10 @@ function scoreLrcTrack(entry: any, title: string, artist: string, durationMs: nu
 
   let score = 0;
 
-  if (trackTitle === wantTitle) {
+  // Число словами («4.30» и «Четыре тридцать») — то же название.
+  const numeralEq = numeralEquivalent(title, String(entry?.trackName ?? ""));
+
+  if (numeralEq || trackTitle === wantTitle) {
     score += 10;
   } else if (trackTitle.includes(wantTitle) || wantTitle.includes(trackTitle)) {
     score += 6;
@@ -1393,7 +1503,8 @@ function scoreLrcTrack(entry: any, title: string, artist: string, durationMs: nu
   //  * Многословное и уникальное название («ВЫЗВАЛ ШЛЮХУ x mylancore»)
   //    пропускаем: перезаливы и ремиксы часто отличаются по длительности.
   const singleWordTitle = wantTitle.split(" ").filter(Boolean).length < 2;
-  if (!lrcArtistMatches(entry, title, artist)) {
+  // Число словами — то же название, чужой артист записи его не перекрывает.
+  if (!numeralEq && !lrcArtistMatches(entry, title, artist)) {
     const weakTitle = lrcTitleCoverage(entry, title) <= 0.5;
 
     // Однословное название («temptation», «Рассвет») без совпадения артиста
@@ -1417,6 +1528,7 @@ function lrcTitleMatches(entry: any, title: string): boolean {
   const track = normalizeGeniusText(entry?.trackName);
 
   if (!want || !track) return false;
+  if (numeralEquivalent(title, entry?.trackName)) return true;
   if (track === want || track.includes(want) || want.includes(track)) return true;
 
   // Хотя бы одно слово названия должно найтись в названии записи:
@@ -1523,6 +1635,39 @@ async function getLrclibPlainLyrics(
       }
     }
 
+    // Fallback: Lrcmux — тот же агрегатор, что даёт караоке. Умеет отдавать и
+    // обычный текст, когда на LRCLIB записи нет вовсе. Ищем по паре «артист +
+    // название»: Lrcmux находит перезаливы, где в теге стоит ник загрузившего
+    // («lightprey»), а на странице указан настоящий исполнитель.
+    if (!best) {
+      try {
+        const url =
+          `${LRCMUX_API}?artist=${encodeURIComponent(artist)}` +
+          `&title=${encodeURIComponent(title)}&format=lrc`;
+        const res = await fetch(url, {
+          headers: { "User-Agent": LRCLIB_UA },
+          signal: AbortSignal.timeout(KARALYR_TIMEOUT),
+        });
+        if (res.ok) {
+          const body = await res.text();
+          const plain = stripLrcTimestamps(body);
+          if (plain.trim().length >= 80) {
+            best = {
+              entry: {
+                plainLyrics: plain,
+                trackName: title,
+                artistName: artist,
+                duration: durationMs / 1000,
+              },
+              score: 8,
+            };
+          }
+        }
+      } catch (e) {
+        log.warn("Lrcmux: не удалось получить текст", e);
+      }
+    }
+
     if (best && best.score >= 4) {
       result = {
         found: true,
@@ -1595,9 +1740,16 @@ async function getSyncedLyrics(
           if (!lrcTitleMatches(entry, title)) continue;
 
           // Ремикс/версия: если в названии трека есть маркер версии,
-          // а у записи LRCLIB его нет — это другая песня.
+          // а у записи LRCLIB его нет — это другая песня. Исключение —
+          // запись, узнанная по числу словами («4.30» и «Четыре тридцать»):
+          // это точно тот же трек, только ремикс.
           const trackName = String(entry.trackName ?? "");
-          if (!versionMarkersCompatible(title, trackName)) continue;
+          if (
+            !numeralEquivalent(title, trackName) &&
+            !versionMarkersCompatible(title, trackName)
+          ) {
+            continue;
+          }
 
           const score = scoreLrcTrack(entry, title, artist, durationMs);
           if (isBetterLrc(score, entry, best, durationMs)) best = { entry, score };
@@ -1651,7 +1803,7 @@ async function getSyncedLyrics(
         });
         if (res.ok) {
           const body = await res.text();
-          if (body.trim().length > 20) {
+          if (body.trim().length > 20 && hasLrcTimestamps(body)) {
             best = {
               entry: {
                 syncedLyrics: body,
