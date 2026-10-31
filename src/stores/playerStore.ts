@@ -146,7 +146,15 @@ export const usePlayerStore = create<PlayerState>((set, get) => ({
     const token = get().playToken + 1;
     // Новая очередь — значит, источник долива мог смениться: снимаем
     // отметку «источник исчерпан» и запоминаем режим DRM для `next()`.
-    set({ playToken: token, shouldPlay: true, allowDrm, queueEnd: false });
+    // Обычное воспроизведение (не из волны) снимает и долив волны: очередь
+    // сменилась, и подмешивать волные треки в неё больше нельзя.
+    set({
+      playToken: token,
+      shouldPlay: true,
+      allowDrm,
+      queueEnd: false,
+      ...(allowDrm ? {} : { refill: null, refilling: false }),
+    });
 
     logAction("play", {
       id: track.id,
@@ -403,8 +411,10 @@ export const usePlayerStore = create<PlayerState>((set, get) => ({
     }
 
     if (!audio) {
-      // Трек ещё грузится или был остановлен — включаем заново.
-      if (currentTrack) get().play(currentTrack, queue, queueIndex);
+      // Трек ещё грузится или был остановлен — включаем заново. Режим DRM
+      // сохраняем: это перезапуск текущего трека, а не новая очередь, и
+      // волну он останавливать не должен.
+      if (currentTrack) get().play(currentTrack, queue, queueIndex, { allowDrm: get().allowDrm });
       return;
     }
 
@@ -716,19 +726,22 @@ export const usePlayerStore = create<PlayerState>((set, get) => ({
     set({ waitingForNetwork: false, error: null });
 
     if (shouldPlay && currentTrack) {
+      // Режим DRM сохраняем: это перезапуск после отвала сети, а не новая
+      // очередь — волну он останавливать не должен.
+      const allowDrm = get().allowDrm;
       if (hls && audio) {
         hls.startLoad();
         void audio.play().catch(() => {
-          get().play(currentTrack, queue, queueIndex);
+          get().play(currentTrack, queue, queueIndex, { allowDrm });
         });
         set({ isPlaying: true });
       } else if (audio && audio.src && !audio.error) {
         void audio.play().catch(() => {
-          get().play(currentTrack, queue, queueIndex);
+          get().play(currentTrack, queue, queueIndex, { allowDrm });
         });
         set({ isPlaying: true });
       } else {
-        get().play(currentTrack, queue, queueIndex);
+        get().play(currentTrack, queue, queueIndex, { allowDrm });
         if (savedTimeOnDisconnect > 0) {
           setTimeout(() => {
             const d = (get().duration || 1) / 1000;

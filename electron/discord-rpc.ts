@@ -249,6 +249,9 @@ export class DiscordRpc {
         pid: process.pid,
         activity: activity
           ? {
+              // Тип 2 — LISTENING: Discord пишет «Слушает …», а не «Играет в …»
+              // (тип 0 по умолчанию — «игра», для музыки он вводит в заблуждение).
+              type: 2,
               details: activity.details,
               state: activity.state,
               ...(Object.keys(assets).length ? { assets } : {}),

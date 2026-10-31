@@ -393,6 +393,10 @@ async fn send_activity<W>(
                 value.insert("assets".to_string(), Value::Object(assets));
             }
 
+            // Тип 2 — LISTENING: Discord пишет «Слушает …», а не «Играет в …»
+            // (тип 0 по умолчанию — «игра», для музыки он вводит в заблуждение).
+            value.insert("type".to_string(), json!(2));
+
             if let Some(start) = activity.start_timestamp {
                 value.insert("timestamps".to_string(), json!({ "start": start }));
             }
