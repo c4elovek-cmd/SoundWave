@@ -1,5 +1,7 @@
 import { create } from "zustand";
 import { showToast } from "./toastStore";
+import { SCTrack } from "../types/soundcloud";
+import { logAction } from "../lib/actionLog";
 
 /** Состояние скачивания одного трека. */
 export interface DownloadInfo {
@@ -9,15 +11,25 @@ export interface DownloadInfo {
   path?: string;
 }
 
+interface BatchDownload {
+  label: string;
+  total: number;
+  done: number;
+  failed: number;
+}
+
 interface DownloadState {
   /** Прогресс по id трека. */
   downloads: Record<number, DownloadInfo>;
+  /** Идёт пакетное скачивание (кнопка «Скачать всё»). */
+  batch: BatchDownload | null;
   setInfo: (trackId: number, info: DownloadInfo) => void;
   clear: (trackId: number) => void;
 }
 
 export const useDownloadStore = create<DownloadState>((set) => ({
   downloads: {},
+  batch: null,
   setInfo: (trackId, info) =>
     set((state) => ({ downloads: { ...state.downloads, [trackId]: info } })),
   clear: (trackId) =>
@@ -107,5 +119,101 @@ export async function downloadTrack(
       error: error instanceof Error ? error.message : "Не удалось скачать трек",
     });
     window.setTimeout(() => useDownloadStore.getState().clear(trackId), 4000);
+  }
+}
+
+/** Ждёт, пока бэкенд отчитается о готовности или ошибке по треку. */
+function downloadTrackAndWait(track: SCTrack): Promise<DownloadInfo> {
+  return new Promise((resolve) => {
+    let settled = false;
+
+    const finish = (info: DownloadInfo) => {
+      if (settled) return;
+      settled = true;
+      unsubscribe();
+      window.clearTimeout(timer);
+      resolve(info);
+    };
+
+    const check = () => {
+      const info = useDownloadStore.getState().downloads[track.id];
+      if (info && (info.state === "done" || info.state === "error")) finish(info);
+    };
+
+    const unsubscribe = useDownloadStore.subscribe(check);
+    // Страховка: если событие от бэкенда потерялось, не виснем навсегда.
+    const timer = window.setTimeout(() => {
+      finish({ percent: 0, state: "error", error: "Скачивание прервано по таймауту" });
+    }, 15 * 60 * 1000);
+
+    void downloadTrack(track.id, track.title, track.user?.username ?? "");
+  });
+}
+
+/**
+ * Скачивает список треков подряд — кнопка «Скачать всё».
+ *
+ * По одному, а не всё сразу: иначе на коллекцию в сотню лайков обрушивается
+ * сотня одновременных загрузок. Прогресс по каждому треку виден в его строке
+ * списка; уже скачанные бэкенд пропускает сам (файл с тем же именем есть).
+ */
+export async function downloadTracks(
+  tracks: SCTrack[],
+  label: string
+): Promise<void> {
+  ensureDownloadSubscription();
+
+  const list = tracks.filter((track) => track.id && track.title);
+  if (list.length === 0) return;
+
+  const running = useDownloadStore.getState().batch;
+  if (running) {
+    showToast({
+      kind: "info",
+      title: "Скачивание уже идёт",
+      message: `${running.label}: ${running.done + running.failed}/${running.total}`,
+      timeout: 4000,
+    });
+    return;
+  }
+
+  useDownloadStore.setState({ batch: { label, total: list.length, done: 0, failed: 0 } });
+  logAction("tracks.download_batch", { label, count: list.length });
+
+  try {
+    for (const track of list) {
+      const info = await downloadTrackAndWait(track);
+      const current = useDownloadStore.getState().batch;
+      if (!current) break;
+      useDownloadStore.setState({
+        batch: {
+          ...current,
+          done: current.done + (info.state === "done" ? 1 : 0),
+          failed: current.failed + (info.state === "error" ? 1 : 0),
+        },
+      });
+    }
+  } finally {
+    const result = useDownloadStore.getState().batch;
+    useDownloadStore.setState({ batch: null });
+
+    if (result && result.total > 0) {
+      showToast({
+        kind: result.failed === 0 ? "success" : "info",
+        title:
+          result.failed === 0
+            ? `${result.label} — всё скачано`
+            : `${result.label} — готово`,
+        message:
+          result.failed === 0
+            ? `${result.done} треков в папке загрузок`
+            : `${result.done} скачано, ${result.failed} с ошибкой`,
+        timeout: 6000,
+        action: {
+          label: "Открыть папку",
+          onClick: () => void window.electronAPI?.openPath?.("downloads"),
+        },
+      });
+    }
   }
 }

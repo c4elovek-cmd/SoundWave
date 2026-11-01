@@ -1514,6 +1514,31 @@ async fn download_track(
 
     report_download(&app, track_id, "started", 0, Value::Null);
 
+    // Уже скачан? Повторная кнопка «скачать всё» не должна плодить
+    // дубликаты: если файл с таким именем лежит в загрузках, сообщаем
+    // «готово» и не качаем второй раз.
+    let dir = app
+        .path()
+        .download_dir()
+        .unwrap_or_else(|_| std::path::PathBuf::from("."));
+    let file_name = format!(
+        "{} - {}.mp3",
+        safe_file_name(&artist),
+        safe_file_name(&title)
+    );
+    let existing = dir.join(&file_name);
+    if existing.exists() {
+        let path_text = existing.to_string_lossy().to_string();
+        report_download(
+            &app,
+            track_id,
+            "done",
+            100,
+            serde_json::json!({ "path": path_text }),
+        );
+        return Ok(serde_json::json!({ "path": path_text, "skipped": true }));
+    }
+
     let stream = state.sc.resolve_download(track_id).await.map_err(|e| {
         report_download(
             &app,
@@ -1636,15 +1661,6 @@ async fn download_track(
     let _ = file.sync_all().await;
     drop(file);
 
-    let dir = app
-        .path()
-        .download_dir()
-        .unwrap_or_else(|_| std::path::PathBuf::from("."));
-    let file_name = format!(
-        "{} - {}.mp3",
-        safe_file_name(&artist),
-        safe_file_name(&title)
-    );
     let path = unique_path(&dir, &file_name);
     let path_text = path.to_string_lossy().to_string();
 

@@ -16,6 +16,7 @@ import OfflineBanner from "./components/OfflineBanner/OfflineBanner";
 import UpdateBanner from "./components/UpdateBanner/UpdateBanner";
 import TrackPage from "./pages/TrackPage";
 import ArtistPage from "./pages/ArtistPage";
+import PlaylistPage from "./pages/PlaylistPage";
 import { logAction } from "./lib/actionLog";
 import Player from "./components/Player/Player";
 import LyricsPanel from "./components/Lyrics/LyricsPanel";
@@ -49,6 +50,7 @@ export default function App() {
     currentPlaylistId,
     openTrack,
     openArtist,
+    openPlaylist,
     goBack,
     history,
     isLoggedIn,
@@ -303,6 +305,12 @@ export default function App() {
       case "artist":
         return currentArtistId ? (
           <ArtistPage artistId={currentArtistId} />
+        ) : (
+          <HomePage />
+        );
+      case "playlist":
+        return currentPlaylistId ? (
+          <PlaylistPage playlistId={currentPlaylistId} />
         ) : (
           <HomePage />
         );

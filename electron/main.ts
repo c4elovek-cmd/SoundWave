@@ -2781,6 +2781,19 @@ function setupIPC() {  // Получить сохранённые настрой
 
       report("started", 0);
 
+      // Уже скачан? Повторная кнопка «скачать всё» не должна плодить
+      // дубликаты: если файл с таким именем лежит в загрузках, сообщаем
+      // «готово» и не качаем второй раз.
+      const dir = app.getPath("downloads");
+      const existing = path.join(
+        dir,
+        `${safeFileName(artist)} - ${safeFileName(title)}.mp3`
+      );
+      if (existsSync(existing)) {
+        report("done", 100, { path: existing });
+        return { path: existing, skipped: true };
+      }
+
       const tempPath = path.join(
         os.tmpdir(),
         `soundwave-${trackId}-${process.pid}.m4a`
@@ -2827,7 +2840,6 @@ function setupIPC() {  // Получить сохранённые настрой
           await handle.close();
         }
 
-        const dir = app.getPath("downloads");
         const target = uniqueFilePath(
           dir,
           `${safeFileName(artist)} - ${safeFileName(title)}.mp3`

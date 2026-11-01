@@ -32,8 +32,9 @@ interface AppState {
   currentTrackId: number | null;
   openTrack: (id: number) => void;
   openArtist: (id: number) => void;
+  openPlaylist: (id: number) => void;
   // История переходов — для кнопки «Назад»
-  history: { view: View; trackId: number | null; artistId: number | null }[];
+  history: { view: View; trackId: number | null; artistId: number | null; playlistId?: number | null }[];
   goBack: () => void;
   searchQuery: string;
   setSearchQuery: (q: string) => void;
@@ -151,6 +152,22 @@ export const useAppStore = create<AppState>((set, get) => ({
         { view: s.view, trackId: s.currentTrackId, artistId: s.currentArtistId },
       ],
     })),
+  openPlaylist: (id) =>
+    set((s) => ({
+      view: "playlist",
+      currentPlaylistId: id,
+      currentTrackId: null,
+      currentArtistId: null,
+      history: [
+        ...s.history,
+        {
+          view: s.view,
+          trackId: s.currentTrackId,
+          artistId: s.currentArtistId,
+          playlistId: s.currentPlaylistId,
+        },
+      ],
+    })),
   goBack: () =>
     set((s) => {
       const last = s.history[s.history.length - 1];
@@ -159,6 +176,7 @@ export const useAppStore = create<AppState>((set, get) => ({
         view: last.view,
         currentTrackId: last.trackId,
         currentArtistId: last.artistId,
+        currentPlaylistId: last.playlistId ?? null,
         history: s.history.slice(0, -1),
       };
     }),

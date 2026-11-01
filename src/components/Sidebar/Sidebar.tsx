@@ -22,6 +22,7 @@ export default function Sidebar() {
   const {
     view,
     setView,
+    openPlaylist,
     sidebarCollapsed,
     toggleSidebar,
     playlists,
@@ -101,7 +102,7 @@ export default function Sidebar() {
           <button
             key={pl.id}
             className="playlist-item"
-            onClick={() => setView("playlist")}
+            onClick={() => openPlaylist(pl.id)}
             title={pl.title}
           >
             <div className="playlist-cover">

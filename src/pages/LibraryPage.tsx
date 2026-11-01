@@ -1,7 +1,9 @@
 import { useEffect, useRef, useState } from "react";
-import { Heart, CloudArrowUp, MusicNotes, Play } from "../lib/icons";
+import { DownloadSimple, Heart, CloudArrowUp, MusicNotes, Play } from "../lib/icons";
 import { useAppStore } from "../stores/appStore";
 import { usePlayerStore } from "../stores/playerStore";
+import { downloadTracks, useDownloadStore } from "../stores/downloadStore";
+import { logAction } from "../lib/actionLog";
 import { scApi } from "../lib/soundcloud-api";
 import { SCTrack } from "../types/soundcloud";
 import TrackRow from "../components/Track/TrackRow";
@@ -159,6 +161,8 @@ export default function LibraryPage({ mode }: Props) {
   const subtitle =
     mode === "likes" ? "Треки, которые ты лайкнул" : "Треки, которые ты загрузил";
 
+  const batch = useDownloadStore((s) => s.batch);
+
   if (!isLoggedIn) {
     return (
       <div className="page">
@@ -245,6 +249,29 @@ export default function LibraryPage({ mode }: Props) {
               title="Слушать всё"
             >
               <Play size={24} weight="fill" style={{ marginLeft: 3 }} />
+            </button>
+
+            <button
+              className="btn-ghost"
+              disabled={Boolean(batch)}
+              onClick={() => {
+                logAction("library.download_all", { mode, count: tracks.length });
+                void downloadTracks(tracks, title);
+              }}
+              title={
+                batch
+                  ? "Дождитесь окончания текущего скачивания"
+                  : "Скачать все треки списка"
+              }
+            >
+              {batch
+                ? `Скачиваю… ${batch.done + batch.failed}/${batch.total}`
+                : (
+                  <>
+                    <DownloadSimple size={16} style={{ marginRight: 6, verticalAlign: -2 }} />
+                    Скачать всё
+                  </>
+                )}
             </button>
           </div>
 
