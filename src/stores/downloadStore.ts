@@ -54,20 +54,25 @@ export function ensureDownloadSubscription(): void {
 
   subscribed = true;
   window.electronAPI.onDownloadProgress((info) => {
-    useDownloadStore.getState().setInfo(info.trackId, {
+    const store = useDownloadStore.getState();
+    const inBatch = store.batch !== null;
+
+    store.setInfo(info.trackId, {
       percent: info.percent,
       state: info.state as DownloadInfo["state"],
       error: info.error,
       path: info.path,
     });
 
-    if (info.state === "done") {
+    // Во время «Скачать всё» по-трековые плашки не нужны: их были сотни,
+    // и они заваливали экран. Итог покажет пакетная плашка в конце.
+    if (info.state === "done" && !inBatch) {
       showToast({
+        group: "download-done",
         kind: "success",
         title: "Трек скачан",
         message: info.path,
-        // Плашка живёт, пока не закроют: файл можно открыть в любой момент.
-        timeout: 0,
+        timeout: 8000,
         action: info.path
           ? {
               label: "Открыть",
@@ -80,7 +85,10 @@ export function ensureDownloadSubscription(): void {
     }
 
     if (info.state === "error") {
+      // Ошибки схлопываем в одну плашку: важна последняя причина, а не
+      // список из сотни одинаковых.
       showToast({
+        group: "download-error",
         kind: "error",
         title: "Не удалось скачать",
         message: info.error,
@@ -180,17 +188,34 @@ export async function downloadTracks(
   useDownloadStore.setState({ batch: { label, total: list.length, done: 0, failed: 0 } });
   logAction("tracks.download_batch", { label, count: list.length });
 
+  // Одна плашка на весь пакет: обновляется на месте и в конце
+  // превращается в итог. По-трековые плашки в это время не показываем.
+  showToast({
+    group: "download-batch",
+    kind: "info",
+    title: `Скачиваю: ${label}`,
+    message: `0 из ${list.length}`,
+    timeout: 0,
+  });
+
   try {
     for (const track of list) {
       const info = await downloadTrackAndWait(track);
       const current = useDownloadStore.getState().batch;
       if (!current) break;
-      useDownloadStore.setState({
-        batch: {
-          ...current,
-          done: current.done + (info.state === "done" ? 1 : 0),
-          failed: current.failed + (info.state === "error" ? 1 : 0),
-        },
+      const next = {
+        ...current,
+        done: current.done + (info.state === "done" ? 1 : 0),
+        failed: current.failed + (info.state === "error" ? 1 : 0),
+      };
+      useDownloadStore.setState({ batch: next });
+
+      showToast({
+        group: "download-batch",
+        kind: "info",
+        title: `Скачиваю: ${label}`,
+        message: `${next.done + next.failed} из ${next.total}`,
+        timeout: 0,
       });
     }
   } finally {
@@ -199,6 +224,7 @@ export async function downloadTracks(
 
     if (result && result.total > 0) {
       showToast({
+        group: "download-batch",
         kind: result.failed === 0 ? "success" : "info",
         title:
           result.failed === 0
