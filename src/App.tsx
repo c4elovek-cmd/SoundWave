@@ -218,17 +218,57 @@ export default function App() {
     );
 
     // Восстанавливаем сохранённую сессию
+    //
+    // Разлогиниваемся только при явном отказе авторизации (сессия протухла).
+    // Сетевая ошибка — не повод: куки на месте, профиль догрузится позже.
+    // Раньше офлайн-старт сбрасывал вход, и приложение оставалось
+    // «разлогиненным» даже после появления сети.
+    let meRetries = 0;
+    const fetchProfile = () => {
+      void import("./lib/soundcloud-api")
+        .then(({ scApi }) => scApi.getMe())
+        .then((me) => {
+          meRetries = 0;
+          setLoggedIn(true, me);
+        })
+        .catch((e) => {
+          const message = e instanceof Error ? e.message : String(e ?? "");
+          if (/401|403|unauthorized/i.test(message)) {
+            setLoggedIn(false);
+            return;
+          }
+          // Сети нет или SoundCloud не ответил — пробуем ещё несколько раз.
+          if (meRetries < 10) {
+            meRetries += 1;
+            window.setTimeout(fetchProfile, 15_000);
+          }
+        });
+    };
+
+    const applySession = (cookies: string) => {
+      setAuthCookies(cookies);
+      setLoggedIn(true);
+      fetchProfile();
+    };
+
     window.electronAPI.restoreSession?.().then((res) => {
       if (res?.loggedIn && res.cookies) {
-        setAuthCookies(res.cookies);
-        setLoggedIn(true);
-        import("./lib/soundcloud-api")
-          .then(({ scApi }) => scApi.getMe())
-          .then((me) => setLoggedIn(true, me))
-          .catch(() => {
-            // Сессия протухла — показываем кнопку входа, а не пустое меню.
-            setLoggedIn(false);
-          });
+        applySession(res.cookies);
+      }
+    });
+
+    // Сессия не подтвердилась из-за офлайна при старте — при возвращении
+    // сети перепроверяем. Если вход уже есть, но профиль не догрузился,
+    // подтягиваем его отдельно.
+    const unsubReconnect = useNetworkStore.getState().onReconnect(() => {
+      const state = useAppStore.getState();
+      if (!state.isLoggedIn) {
+        window.electronAPI.restoreSession?.().then((res) => {
+          if (res?.loggedIn && res.cookies) applySession(res.cookies);
+        });
+      } else if (!state.currentUser) {
+        meRetries = 0;
+        fetchProfile();
       }
     });
 
@@ -257,6 +297,7 @@ export default function App() {
     window.electronAPI.onMediaPrev(() => prev());
 
     return () => {
+      unsubReconnect();
       // Отписываемся от всех каналов, на которые подписались выше.
       // В режиме разработки React вызывает эффект дважды — без этого
       // команда play/pause срабатывала бы дважды, то есть никак.
