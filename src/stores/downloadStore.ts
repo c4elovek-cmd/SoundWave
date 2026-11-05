@@ -1,4 +1,5 @@
 import { create } from "zustand";
+import { useEffect } from "react";
 import { showToast } from "./toastStore";
 import { SCTrack } from "../types/soundcloud";
 import { logAction } from "../lib/actionLog";
@@ -23,6 +24,8 @@ interface DownloadState {
   downloads: Record<number, DownloadInfo>;
   /** Идёт пакетное скачивание (кнопка «Скачать всё»). */
   batch: BatchDownload | null;
+  /** Путь к скачанному файлу по id трека — такие играются с диска. */
+  known: Record<number, string>;
   setInfo: (trackId: number, info: DownloadInfo) => void;
   clear: (trackId: number) => void;
 }
@@ -30,6 +33,7 @@ interface DownloadState {
 export const useDownloadStore = create<DownloadState>((set) => ({
   downloads: {},
   batch: null,
+  known: {},
   setInfo: (trackId, info) =>
     set((state) => ({ downloads: { ...state.downloads, [trackId]: info } })),
   clear: (trackId) =>
@@ -63,6 +67,14 @@ export function ensureDownloadSubscription(): void {
       error: info.error,
       path: info.path,
     });
+
+    // Скачанный трек запоминаем: плеер будет играть его с диска,
+    // а в строках появится отметка «скачано».
+    if (info.state === "done" && info.path) {
+      useDownloadStore.setState((state) => ({
+        known: { ...state.known, [info.trackId]: info.path as string },
+      }));
+    }
 
     // Во время «Скачать всё» по-трековые плашки не нужны: их были сотни,
     // и они заваливали экран. Итог покажет пакетная плашка в конце.
@@ -242,4 +254,66 @@ export async function downloadTracks(
       });
     }
   }
+}
+
+// --- Уже скачанные треки ---------------------------------------------------
+
+/** Пачка треков, которую собрал `probeDownloadedTrack` и ждёт проверки. */
+const probePending = new Map<number, { id: number; title: string; artist: string }>();
+let probeTimer: number | null = null;
+
+/** Одна проверка папки загрузок на всю пачку строк списка. */
+function flushProbe(): void {
+  probeTimer = null;
+  const list = [...probePending.values()];
+  probePending.clear();
+  if (list.length === 0) return;
+
+  void window.electronAPI
+    ?.findDownloads?.(list)
+    .then((result) => {
+      const entries = Object.entries(result ?? {});
+      if (entries.length === 0) return;
+
+      const known = { ...useDownloadStore.getState().known };
+      for (const [id, path] of entries) {
+        known[Number(id)] = path;
+      }
+      useDownloadStore.setState({ known });
+    })
+    .catch(() => {});
+}
+
+/**
+ * Отмечает трек для проверки «не скачан ли он уже».
+ *
+ * Строки списка вызывают её при появлении; запросы собираются в пачку
+ * и уходят одним вызовом — сотня строк не означает сотню обращений к диску.
+ */
+export function probeDownloadedTrack(track: SCTrack): void {
+  if (!track.id || !track.title) return;
+  if (useDownloadStore.getState().known[track.id]) return;
+
+  probePending.set(track.id, {
+    id: track.id,
+    title: track.title,
+    artist: track.user?.username ?? "",
+  });
+
+  if (probeTimer === null) {
+    probeTimer = window.setTimeout(flushProbe, 100);
+  }
+}
+
+/** Путь к скачанному файлу трека — или null, если он ещё не скачан. */
+export function useDownloadedTrack(track: SCTrack): string | null {
+  const path = useDownloadStore((s) => s.known[track.id]);
+
+  useEffect(() => {
+    probeDownloadedTrack(track);
+    // Проверяем один раз на трек: результат приходит в стор.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [track.id]);
+
+  return path ?? null;
 }

@@ -10,6 +10,7 @@ import {
   Gear,
   SignOut,
   Waveform,
+  DownloadSimple,
 } from "../../lib/icons";
 import { useAppStore } from "../../stores/appStore";
 import { CustomTheme } from "../../lib/themes";
@@ -42,6 +43,7 @@ export default function Sidebar() {
     { id: "library" as const, label: "Библиотека", icon: MusicNotes },
     { id: "likes" as const, label: "Мне нравится", icon: Heart },
     { id: "uploads" as const, label: "Мои загрузки", icon: CloudArrowUp },
+    { id: "downloads" as const, label: "Скачанные", icon: DownloadSimple },
   ];
 
   return (

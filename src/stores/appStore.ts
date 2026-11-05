@@ -11,7 +11,7 @@ import {
 import { logAction } from "../lib/actionLog";
 
 export type Theme = string;
-export type View = "home" | "wave" | "search" | "library" | "likes" | "uploads" | "playlist" | "artist" | "track";
+export type View = "home" | "wave" | "search" | "library" | "likes" | "uploads" | "playlist" | "downloads" | "artist" | "track";
 
 interface AppState {
   // Тема

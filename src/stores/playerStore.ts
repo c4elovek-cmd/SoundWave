@@ -2,6 +2,8 @@ import { create } from "zustand";
 import { SCTrack, RepeatMode } from "../types/soundcloud";
 import Hls from "hls.js";
 import { scApi } from "../lib/soundcloud-api";
+import { localFileUrl } from "../lib/localFiles";
+import { useDownloadStore } from "./downloadStore";
 import { logAction } from "../lib/actionLog";
 import { errorText } from "../lib/errorText";
 
@@ -57,7 +59,7 @@ interface PlayerState {
     track: SCTrack,
     queue?: SCTrack[],
     index?: number,
-    options?: { allowDrm?: boolean }
+    options?: { allowDrm?: boolean; localPath?: string }
   ) => void;
   pause: () => void;
   resume: () => void;
@@ -131,9 +133,18 @@ export const usePlayerStore = create<PlayerState>((set, get) => ({
     // Треки с DRM браузер не играет: у SoundCloud для них только
     // зашифрованные потоки. В обычных списках их пропускаем, в «Моей
     // волне» оставляем — там пользователь сам решает.
+    // Скачанный файл снимает ограничение: локальный mp3 играет всегда.
     const allowDrm = options?.allowDrm ?? false;
+    // Локальный файл — приоритетный источник: играет без сети и
+    // начинается мгновенно. Явный путь из опций, метка на треке
+    // или ранее найденный файл в папке загрузок.
+    const localPath =
+      options?.localPath ??
+      track.localPath ??
+      useDownloadStore.getState().known[track.id] ??
+      null;
 
-    if (track.drm && !allowDrm) {
+    if (track.drm && !allowDrm && !localPath) {
       set({
         error: "Трек защищён DRM — звук недоступен",
         isPlaying: false,
@@ -197,9 +208,9 @@ export const usePlayerStore = create<PlayerState>((set, get) => ({
       error: null,
     });
 
-    // Защита от потери интернета: если сети нет прямо сейчас,
-    // запоминаем трек и ставим в режим ожидания сети
-    if (typeof navigator !== "undefined" && !navigator.onLine) {
+    // Скачанный файл играет с диска даже без сети: оффлайн-охрану
+    // и запрос ссылки у SoundCloud пропускаем целиком.
+    if (!localPath && typeof navigator !== "undefined" && !navigator.onLine) {
       set({
         isPlaying: false,
         shouldPlay: true,
@@ -214,25 +225,44 @@ export const usePlayerStore = create<PlayerState>((set, get) => ({
     // client_id отдаёт 404, поэтому его использовать нельзя.
     let src = "";
     let protocol = "progressive";
-    try {
-      const stream = await scApi.getStreamUrl(track.id);
-      src = stream.url;
-      protocol = stream.protocol;
-    } catch (e) {
-      const message = errorText(e, "Не удалось получить ссылку на трек");
-      const isNet =
-        message.includes("интернет") ||
-        message.includes("сеть") ||
-        (typeof navigator !== "undefined" && !navigator.onLine);
-      set({
-        error: isNet
-          ? "Ожидание сети: трек начнёт играть автоматически при подключении"
-          : message,
-        isPlaying: false,
-        waitingForNetwork: isNet,
-      });
-      console.error("Ошибка подготовки трека:", e);
-      return;
+    let isLocal = false;
+
+    if (localPath) {
+      src = localFileUrl(localPath);
+      isLocal = true;
+      logAction("play_local", { id: track.id, title: track.title });
+    } else {
+      try {
+        const stream = await scApi.getStreamUrl(track.id);
+        src = stream.url;
+        protocol = stream.protocol;
+      } catch (e) {
+        // Ссылку получить не удалось, но файл мог скачаться раньше —
+        // тогда всё равно играем с диска.
+        const fallback = await window.electronAPI
+          ?.findDownload?.(track.title, track.user?.username ?? "")
+          .catch(() => null);
+        if (fallback?.found && fallback.path) {
+          src = localFileUrl(fallback.path);
+          isLocal = true;
+          logAction("play_local_fallback", { id: track.id, title: track.title });
+        } else {
+          const message = errorText(e, "Не удалось получить ссылку на трек");
+          const isNet =
+            message.includes("интернет") ||
+            message.includes("сеть") ||
+            (typeof navigator !== "undefined" && !navigator.onLine);
+          set({
+            error: isNet
+              ? "Ожидание сети: трек начнёт играть автоматически при подключении"
+              : message,
+            isPlaying: false,
+            waitingForNetwork: isNet,
+          });
+          console.error("Ошибка подготовки трека:", e);
+          return;
+        }
+      }
     }
 
     // Пока шёл запрос, пользователь мог нажать паузу или включить другой трек.
@@ -255,7 +285,8 @@ export const usePlayerStore = create<PlayerState>((set, get) => ({
 
     // SoundCloud отдаёт потоки в HLS (m3u8 + fMP4/AAC). Chromium не играет
     // HLS нативно, поэтому подключаем hls.js через MediaSource.
-    const isHls = protocol === "hls" || src.includes(".m3u8");
+    // Локальный mp3 — обычный источник, HLS там не встречается.
+    const isHls = !isLocal && (protocol === "hls" || src.includes(".m3u8"));
 
     if (isHls && Hls.isSupported()) {
       const hls = new Hls({ enableWorker: false, lowLatencyMode: false });
@@ -331,7 +362,7 @@ export const usePlayerStore = create<PlayerState>((set, get) => ({
     });
 
     audio.addEventListener("waiting", () => {
-      if (typeof navigator !== "undefined" && !navigator.onLine) {
+      if (!isLocal && typeof navigator !== "undefined" && !navigator.onLine) {
         set({
           waitingForNetwork: true,
           error: "Ожидание подключения к интернету...",
@@ -340,7 +371,7 @@ export const usePlayerStore = create<PlayerState>((set, get) => ({
     });
 
     audio.addEventListener("stalled", () => {
-      if (typeof navigator !== "undefined" && !navigator.onLine) {
+      if (!isLocal && typeof navigator !== "undefined" && !navigator.onLine) {
         set({
           waitingForNetwork: true,
           error: "Ожидание подключения к интернету...",
@@ -369,6 +400,14 @@ export const usePlayerStore = create<PlayerState>((set, get) => ({
 
     audio.addEventListener("error", () => {
       console.error("Ошибка воспроизведения");
+      if (isLocal) {
+        // Локальный файл: сети тут ни при чём — файл пропал или побился.
+        set({
+          isPlaying: false,
+          error: "Не удалось воспроизвести скачанный файл",
+        });
+        return;
+      }
       if (typeof navigator !== "undefined" && !navigator.onLine) {
         set({
           waitingForNetwork: true,

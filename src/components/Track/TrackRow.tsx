@@ -7,6 +7,7 @@ import {
   downloadTrack,
   ensureDownloadSubscription,
   useDownloadStore,
+  useDownloadedTrack,
 } from "../../stores/downloadStore";
 import { formatDuration, formatNumber } from "../../lib/soundcloud-api";
 import { logAction } from "../../lib/actionLog";
@@ -33,6 +34,8 @@ export default function TrackRow({
 }: Props) {
   const { currentTrack, isPlaying, play, togglePlay } = usePlayerStore();
   const download = useDownloadStore((s) => s.downloads[track.id]);
+  // Скачанный файл: плеер играет его с диска, без сети.
+  const localPath = useDownloadedTrack(track);
   const likedTracks = useAppStore((s) => s.likedTracks);
   const toggleLike = useAppStore((s) => s.toggleLike);
   const openTrack = useAppStore((s) => s.openTrack);
@@ -158,6 +161,7 @@ export default function TrackRow({
         className={`track-download ${download?.state ?? ""}`}
         onClick={(e) => {
           e.stopPropagation();
+          if (localPath) return;
           logAction("track.download", { id: track.id, title: track.title });
           void downloadTrack(
             track.id,
@@ -165,11 +169,19 @@ export default function TrackRow({
             track.user?.username ?? ""
           );
         }}
-        title="Скачать трек"
-        aria-label="Скачать трек"
-        disabled={download?.state === "started" || download?.state === "progress"}
+        title={
+          localPath
+            ? "Скачан — играет из папки загрузок"
+            : "Скачать трек"
+        }
+        aria-label={localPath ? "Скачан" : "Скачать трек"}
+        disabled={
+          Boolean(localPath) ||
+          download?.state === "started" ||
+          download?.state === "progress"
+        }
       >
-        {download?.state === "done" ? (
+        {download?.state === "done" || localPath ? (
           <Check size={16} weight="bold" style={{ color: "var(--success)" }} />
         ) : download?.state === "started" || download?.state === "progress" ? (
           <span className="track-download-percent">{download.percent}%</span>

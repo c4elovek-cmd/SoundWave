@@ -180,6 +180,15 @@ if (isExternalPage) {
     // Скачивание трека в папку «Загрузки»
     downloadTrack: (trackId: number, title: string, artist: string) =>
       ipcRenderer.invoke("download-track", trackId, title, artist),
+    // Скачан ли трек — плеер играет такие локально, без сети
+    findDownload: (title: string, artist: string) =>
+      ipcRenderer.invoke("find-download", title, artist),
+    // Пакетная проверка списка треков: { id: путь }
+    findDownloads: (
+      tracks: Array<{ id: number; title: string; artist: string }>
+    ) => ipcRenderer.invoke("find-downloads", tracks),
+    // Все скачанные mp3 — страница «Скачанные»
+    listDownloads: () => ipcRenderer.invoke("list-downloads"),
     onDownloadProgress: (
       callback: (info: {
         trackId: number;

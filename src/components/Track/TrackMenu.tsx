@@ -109,8 +109,8 @@ export default function TrackMenu({ track, queue, x, y, onClose }: Props) {
     },
     {
       icon: <DownloadSimple size={15} />,
-      label: "Скачать",
-      disabled: download?.state === "started" || download?.state === "progress",
+      label: track.localPath ? "Скачано" : "Скачать",
+      disabled: Boolean(track.localPath) || download?.state === "started" || download?.state === "progress",
       onClick: () => {
         logAction("track.download", { id: track.id, title: track.title });
         void downloadTrack(track.id, track.title, track.user?.username ?? "");

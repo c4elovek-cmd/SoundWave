@@ -333,6 +333,20 @@ export function createTauriBridge(): Window["electronAPI"] {
         title,
         artist,
       }),
+    /** Скачан ли трек — плеер играет такие локально, без сети. */
+    findDownload: (title: string, artist: string) =>
+      invoke<{ found: boolean; path?: string }>("find_download", {
+        title,
+        artist,
+      }),
+    /** Пакетная проверка списка треков: { id: путь }. */
+    findDownloads: (tracks: Array<{ id: number; title: string; artist: string }>) =>
+      invoke<Record<string, string>>("find_downloads", { tracks }),
+    /** Все скачанные mp3 из папки загрузок. */
+    listDownloads: () =>
+      invoke<
+        { file: string; path: string; size: number; modified: number }[]
+      >("list_downloads", {}),
     openPath: (target: string) =>
       invoke<{ ok: boolean; error?: string }>("open_path", { path: target }),
     onDownloadProgress: (

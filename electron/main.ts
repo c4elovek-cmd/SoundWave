@@ -2872,6 +2872,78 @@ function setupIPC() {  // Получить сохранённые настрой
       }
     }
   );
+
+  // Скачан ли трек: файл «Артист - Трек.mp3» в папке загрузок.
+  // Плеер играет такие треки локально, без сети.
+  ipcMain.handle(
+    "find-download",
+    (_event, title: string, artist: string) => {
+      const dir = app.getPath("downloads");
+      const file = path.join(
+        dir,
+        `${safeFileName(String(artist ?? ""))} - ${safeFileName(String(title ?? ""))}.mp3`
+      );
+      return existsSync(file)
+        ? { found: true, path: file }
+        : { found: false };
+    }
+  );
+
+  // Пакетная проверка: список треков → карта «id → путь».
+  // Страницам невыгодно дёргать по одному треку за раз.
+  ipcMain.handle(
+    "find-downloads",
+    (_event, tracks: Array<{ id: number; title: string; artist: string }>) => {
+      const dir = app.getPath("downloads");
+      const out: Record<string, string> = {};
+
+      for (const item of tracks ?? []) {
+        if (!item || typeof item.id !== "number" || !item.title) continue;
+        const file = path.join(
+          dir,
+          `${safeFileName(String(item.artist ?? ""))} - ${safeFileName(String(item.title))}.mp3`
+        );
+        if (existsSync(file)) out[String(item.id)] = file;
+      }
+
+      return out;
+    }
+  );
+
+  // Все скачанные mp3 из папки загрузок — для страницы «Скачанные».
+  ipcMain.handle("list-downloads", () => {
+    const dir = app.getPath("downloads");
+    const out: Array<{
+      file: string;
+      path: string;
+      size: number;
+      modified: number;
+    }> = [];
+
+    try {
+      for (const name of readdirSync(dir)) {
+        if (!name.toLowerCase().endsWith(".mp3")) continue;
+        const full = path.join(dir, name);
+        try {
+          const stats = statSync(full);
+          out.push({
+            file: name,
+            path: full,
+            size: stats.size,
+            modified: stats.mtimeMs,
+          });
+        } catch {
+          continue;
+        }
+      }
+    } catch {
+      // Папки может не быть — считаем список пустым.
+    }
+
+    out.sort((a, b) => b.modified - a.modified);
+    return out;
+  });
+
   // Окно входа — единственное дополнительное окно приложения
   ipcMain.handle("open-auth-window", () => {
     return navigateAuthWindow("/auth");

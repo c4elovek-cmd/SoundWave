@@ -17,6 +17,7 @@ import UpdateBanner from "./components/UpdateBanner/UpdateBanner";
 import TrackPage from "./pages/TrackPage";
 import ArtistPage from "./pages/ArtistPage";
 import PlaylistPage from "./pages/PlaylistPage";
+import DownloadedPage from "./pages/DownloadedPage";
 import { logAction } from "./lib/actionLog";
 import Player from "./components/Player/Player";
 import LyricsPanel from "./components/Lyrics/LyricsPanel";
@@ -296,6 +297,8 @@ export default function App() {
         return <LibraryPage mode="uploads" />;
       case "library":
         return <LibraryPage mode="likes" />;
+      case "downloads":
+        return <DownloadedPage />;
       case "track":
         return currentTrackId ? (
           <TrackPage trackId={currentTrackId} />

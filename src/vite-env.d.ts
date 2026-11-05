@@ -90,6 +90,19 @@ declare global {
         title: string,
         artist: string
       ) => Promise<{ ok: boolean; path?: string; error?: string }>;
+      /** Скачан ли трек: файл «Артист - Трек.mp3» в загрузках. */
+      findDownload: (
+        title: string,
+        artist: string
+      ) => Promise<{ found: boolean; path?: string }>;
+      /** Пакетная проверка списка треков: { id: путь }. */
+      findDownloads: (
+        tracks: Array<{ id: number; title: string; artist: string }>
+      ) => Promise<Record<string, string>>;
+      /** Все скачанные mp3 из папки загрузок. */
+      listDownloads: () => Promise<
+        { file: string; path: string; size: number; modified: number }[]
+      >;
       onDownloadProgress: (
         callback: (info: {
           trackId: number;

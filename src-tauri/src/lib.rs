@@ -1763,6 +1763,124 @@ async fn download_track(
 
     Ok(serde_json::json!({ "ok": true, "path": path_text }))
 }
+// --- Скачанные файлы -------------------------------------------------------
+
+/// Скачан ли трек: ищет файл «Артист - Трек.mp3» в папке загрузок.
+#[tauri::command]
+fn find_download(app: AppHandle, title: String, artist: String) -> Result<Value, String> {
+    let dir = app
+        .path()
+        .download_dir()
+        .unwrap_or_else(|_| std::path::PathBuf::from("."));
+    let file_name = format!(
+        "{} - {}.mp3",
+        safe_file_name(&artist),
+        safe_file_name(&title)
+    );
+    let path = dir.join(&file_name);
+
+    if path.exists() {
+        Ok(serde_json::json!({
+            "found": true,
+            "path": path.to_string_lossy(),
+        }))
+    } else {
+        Ok(serde_json::json!({ "found": false }))
+    }
+}
+
+/// Ищет скачанные файлы для пачки треков сразу — список страницам
+/// невыгодно дёргать по одному треку. Возвращает карту «id → путь».
+#[tauri::command]
+fn find_downloads(app: AppHandle, tracks: Vec<Value>) -> Result<Value, String> {
+    let dir = app
+        .path()
+        .download_dir()
+        .unwrap_or_else(|_| std::path::PathBuf::from("."));
+
+    let mut result = serde_json::Map::new();
+    for item in tracks {
+        let Some(id) = item.get("id").and_then(|v| v.as_u64()) else {
+            continue;
+        };
+        let title = item
+            .get("title")
+            .and_then(|v| v.as_str())
+            .unwrap_or("")
+            .trim();
+        if title.is_empty() {
+            continue;
+        }
+        let artist = item
+            .get("artist")
+            .and_then(|v| v.as_str())
+            .unwrap_or("")
+            .trim();
+
+        let file_name = format!(
+            "{} - {}.mp3",
+            safe_file_name(artist),
+            safe_file_name(title)
+        );
+        let path = dir.join(&file_name);
+        if path.exists() {
+            result.insert(id.to_string(), serde_json::json!(path.to_string_lossy()));
+        }
+    }
+
+    Ok(Value::Object(result))
+}
+
+/// Список скачанных треков: все mp3 из папки загрузок.
+#[tauri::command]
+fn list_downloads(app: AppHandle) -> Result<Vec<Value>, String> {
+    let dir = app
+        .path()
+        .download_dir()
+        .unwrap_or_else(|_| std::path::PathBuf::from("."));
+
+    let mut out: Vec<Value> = Vec::new();
+    let Ok(entries) = std::fs::read_dir(&dir) else {
+        return Ok(out);
+    };
+
+    for entry in entries.flatten() {
+        let path = entry.path();
+        let is_mp3 = path
+            .extension()
+            .map(|ext| ext.eq_ignore_ascii_case("mp3"))
+            .unwrap_or(false);
+        if !is_mp3 {
+            continue;
+        }
+
+        let Ok(meta) = entry.metadata() else {
+            continue;
+        };
+        let modified = meta
+            .modified()
+            .ok()
+            .and_then(|time| time.duration_since(std::time::UNIX_EPOCH).ok())
+            .map(|delta| (delta.as_secs() * 1000) as i64)
+            .unwrap_or(0);
+
+        out.push(serde_json::json!({
+            "file": entry.file_name().to_string_lossy(),
+            "path": path.to_string_lossy(),
+            "size": meta.len(),
+            "modified": modified,
+        }));
+    }
+
+    // Свежие сверху.
+    out.sort_by(|a, b| {
+        let key = |v: &Value| v.get("modified").and_then(|m| m.as_i64()).unwrap_or(0);
+        key(b).cmp(&key(a))
+    });
+
+    Ok(out)
+}
+
 // --- Окно ------------------------------------------------------------------
 
 fn main_window(app: &tauri::AppHandle) -> Option<tauri::WebviewWindow> {
@@ -1984,6 +2102,9 @@ pub fn run() {
             window_close,
             window_start_dragging,
             download_track,
+            find_download,
+            find_downloads,
+            list_downloads,
             open_path,
             show_window,
             set_fullscreen,

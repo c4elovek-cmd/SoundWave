@@ -48,6 +48,13 @@ export interface SCTrack {
   description: string | null;
   // Для отображения
   display_title?: string;
+  /**
+   * Трек скачан и лежит в папке загрузок — плеер играет его с диска,
+   * без сети. Заполняет downloadStore после проверки папки.
+   */
+  localPath?: string;
+  /** Размер локального файла в байтах — только у строк страницы «Скачанные». */
+  localSize?: number;
 }
 
 export interface SCPlaylist {
