@@ -445,6 +445,47 @@
   color: var(--accent-text);
 }
 
+/* Ползунок сдвига караоке с кнопкой сброса в 0 */
+.settings-offset-row {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  min-width: 220px;
+}
+
+.settings-offset-row .settings-range {
+  flex: 1;
+}
+
+.settings-offset-zero {
+  flex: none;
+  width: 30px;
+  height: 26px;
+  padding: 0;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  background: var(--bg-elevated);
+  color: var(--text-secondary);
+  font-size: 12px;
+  font-weight: 700;
+  font-variant-numeric: tabular-nums;
+  cursor: pointer;
+  transition:
+    background var(--transition-fast),
+    border-color var(--transition-fast),
+    color var(--transition-fast);
+}
+
+.settings-offset-zero:hover:not(:disabled) {
+  border-color: var(--accent);
+  color: var(--accent);
+}
+
+.settings-offset-zero:disabled {
+  opacity: 0.45;
+  cursor: default;
+}
+
 /* Стили оформления */
 
 .settings-style-grid {

@@ -171,6 +171,11 @@ export default function SettingsModal() {
     key: keyof typeof DEFAULTS,
     apply?: () => void
   ) => ({
+    // Автопрокрутка Chromium стартует на mousedown — гасим её сразу,
+    // иначе СКМ на ползунках и списках просто прокручивает страницу.
+    onMouseDown: (e: React.MouseEvent) => {
+      if (e.button === 1) e.preventDefault();
+    },
     onAuxClick: (e: React.MouseEvent) => {
       if (e.button === 1) {
         e.preventDefault();
@@ -566,18 +571,30 @@ export default function SettingsModal() {
 
               <Row
                 label={`Сдвиг караоке — ${settings.karaokeOffsetMs > 0 ? "+" : ""}${settings.karaokeOffsetMs} мс`}
-                hint="Минус — подсветка раньше, плюс — позже. Общая поправка для всех треков"
+                hint="Минус — подсветка раньше, плюс — позже. Общая поправка для всех треков; двойной клик по ползунку — сброс в 0"
               >
-                <input
-                  type="range"
-                  className="settings-range"
-                  min={-3000}
-                  max={3000}
-                  step={50}
-                  value={settings.karaokeOffsetMs}
-                  onChange={(e) => setSetting("karaokeOffsetMs", Number(e.target.value))}
-                  {...middleReset("Сдвиг караоке", "karaokeOffsetMs")}
-                />
+                <div className="settings-offset-row">
+                  <input
+                    type="range"
+                    className="settings-range"
+                    min={-3000}
+                    max={3000}
+                    step={50}
+                    value={settings.karaokeOffsetMs}
+                    onChange={(e) => setSetting("karaokeOffsetMs", Number(e.target.value))}
+                    onDoubleClick={() => setSetting("karaokeOffsetMs", 0)}
+                    {...middleReset("Сдвиг караоке", "karaokeOffsetMs")}
+                  />
+                  <button
+                    className="settings-offset-zero"
+                    onClick={() => setSetting("karaokeOffsetMs", 0)}
+                    disabled={settings.karaokeOffsetMs === 0}
+                    title="Вернуть 0 — без сдвига"
+                    aria-label="Сбросить сдвиг караоке в 0"
+                  >
+                    0
+                  </button>
+                </div>
               </Row>
 
               <Row
