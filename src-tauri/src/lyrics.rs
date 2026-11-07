@@ -995,6 +995,31 @@ fn score_genius_song(song: &Value, titles: &[String], artists: &[String]) -> i32
         }
     }
 
+    // Обратное покрытие: все значимые слова названия страницы есть в нашем
+    // названии («Song of the Beetles» целиком внутри «ONDA ANDAR song of
+    // beetles #2016 …»). Перезаливы подменяют и название, и исполнителя —
+    // но чужой странице нельзя «вложиться» в наше название целиком.
+    // Одно слово не считаем: слишком общее («Girl», «Beetles»).
+    let page_words: Vec<&str> = song_title
+        .split(' ')
+        .filter(|w| w.chars().count() >= 4)
+        .collect();
+    let reverse_covered = {
+        let raw_title = titles.first().map(|t| normalize_text(t)).unwrap_or_default();
+        let title_words: Vec<&str> = raw_title
+            .split(' ')
+            .filter(|w| w.chars().count() >= 4)
+            .collect();
+        page_words.len() >= 2
+            && page_words
+                .iter()
+                .all(|pw| title_words.iter().any(|tw| words_similar(tw, pw)))
+    };
+    if reverse_covered {
+        score += 6;
+        artist_named_in_title = true;
+    }
+
     // Название в треке называет исполнителя («…/… ONDA ANDAR»), а у записи
     // Genius — чужой. Короткое совпадение в одно слово («RANE») тогда не
     // должно давать «уверенный» балл: это другая песня. Жёстко режем ниже
@@ -1165,6 +1190,72 @@ async fn find_genius_lyrics(
             .unwrap_or(-100);
         if best >= 13 {
             break;
+        }
+    }
+
+    // Второй проход: ничего не нашлось — пробуем одиночные слова названия
+    // («beetles» из «ONDA ANDAR song of beetles #2016»). Основной лимит
+    // запросов уходит на полные варианты, до отдельных слов очередь не
+    // доходит. Результаты проходят тот же строгий скоринг.
+    if songs.is_empty() {
+        let word_queries: Vec<&String> = queries
+            .iter()
+            .filter(|q| !q.contains(' ') && q.chars().count() >= 4)
+            .take(8)
+            .collect();
+
+        for query in word_queries {
+            let url = format!(
+                "{GENIUS_ORIGIN}/api/search/multi?per_page=5&q={}",
+                encode_uri_component(query)
+            );
+
+            let text = match fetch_genius(&url, true).await {
+                Ok(text) => text,
+                Err(_) => continue,
+            };
+
+            let search: Value = match serde_json::from_str(&text) {
+                Ok(value) => value,
+                Err(_) => continue,
+            };
+
+            if let Some(sections) = search.get("response").and_then(|r| r.get("sections")).and_then(|s| s.as_array()) {
+                for section in sections {
+                    let Some(hits) = section.get("hits").and_then(|h| h.as_array()) else {
+                        continue;
+                    };
+                    for hit in hits {
+                        let Some(song) = hit.get("result") else {
+                            continue;
+                        };
+                        let url = song.get("url").and_then(|v| v.as_str());
+                        let song_title = song.get("title").and_then(|v| v.as_str());
+                        if url.is_none() || song_title.is_none() {
+                            continue;
+                        }
+
+                        let key = song
+                            .get("id")
+                            .map(|v| v.to_string())
+                            .unwrap_or_else(|| url.unwrap_or_default().to_string());
+                        if seen.contains(&key) {
+                            continue;
+                        }
+                        seen.push(key);
+                        songs.push(song.clone());
+                    }
+                }
+            }
+
+            let best = songs
+                .iter()
+                .map(|song| score_genius_song(song, &titles, &artists))
+                .max()
+                .unwrap_or(-100);
+            if best >= 13 {
+                break;
+            }
         }
     }
 
@@ -2700,6 +2791,25 @@ mod tests {
             score >= 13,
             "страница ремикса должна проходить, получили {score}"
         );
+    }
+
+    #[test]
+    fn accepts_renamed_reupload_from_genius_title_coverage() {
+        // «ONDA ANDAR song of beetles #2016» от kashiraaa: на Genius страница
+        // «Type-0 — Song of the Beetles» — и артист, и название другие, но
+        // название страницы целиком вкладывается в название трека. Такая
+        // страница должна проходить порог приёма (5).
+        let song = serde_json::json!({
+            "title": "Song of the Beetles",
+            "primary_artist": { "name": "Type-0" }
+        });
+        let titles = vec![
+            "ONDA ANDAR song of beetles #2016 prod. onda ondar".to_string(),
+        ];
+        let artists = vec!["kashiraaa".to_string()];
+
+        let score = score_genius_song(&song, &titles, &artists);
+        assert!(score >= 5, "страница должна проходить, получили {score}");
     }
 
     #[test]

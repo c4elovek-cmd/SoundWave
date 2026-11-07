@@ -1182,6 +1182,25 @@ function scoreGeniusSong(
     }
   }
 
+  // Обратное покрытие: все значимые слова названия страницы есть в нашем
+  // названии («Song of the Beetles» целиком внутри «ONDA ANDAR song of
+  // beetles #2016 …»). Перезаливы подменяют и название, и исполнителя —
+  // но чужой странице нельзя «вложиться» в наше название целиком.
+  // Одно слово не считаем: слишком общее («Girl», «Beetles»).
+  const rawTitleWords = normalizeGeniusText(titles[0] ?? "")
+    .split(" ")
+    .filter((word) => word.length >= 4);
+  const pageWords = songTitle.split(" ").filter((word) => word.length >= 4);
+  const reverseCovered =
+    pageWords.length >= 2 &&
+    pageWords.every((pageWord) =>
+      rawTitleWords.some((rawWord) => wordsSimilar(rawWord, pageWord))
+    );
+  if (reverseCovered) {
+    score += 6;
+    artistNamedInTitle = true;
+  }
+
   // Название в треке называет исполнителя («…/… ONDA ANDAR»), а у записи
   // Genius — чужой. Короткое совпадение в одно слово («RANE») тогда не
   // должно давать «уверенный» балл: это другая песня. Жёстко режем ниже
@@ -1298,6 +1317,48 @@ async function findGeniusLyrics(
       .map((song) => ({ song, score: scoreGeniusSong(song, titles, artists) }))
       .sort((a, b) => b.score - a.score)[0];
     if (best && best.score >= 13) break;
+  }
+
+  // Второй проход: ничего не нашлось — пробуем одиночные слова названия
+  // («beetles» из «ONDA ANDAR song of beetles #2016»). Основной лимит
+  // запросов уходит на полные варианты, до отдельных слов очередь не
+  // доходит. Результаты проходят тот же строгий скоринг.
+  if (songs.length === 0) {
+    const wordQueries = titles
+      .filter((t) => !t.includes(" ") && t.length >= 4 && !queries.includes(t))
+      .slice(0, 8);
+
+    for (const query of wordQueries) {
+      let search: any;
+      try {
+        search = await fetchGenius(
+          `${GENIUS_ORIGIN}/api/search/multi?per_page=5&q=${encodeURIComponent(query)}`,
+          true
+        );
+      } catch (e) {
+        log.warn(`Genius: поиск «${query}» не удался`, e);
+        continue;
+      }
+
+      const rawHits: any[] = (search?.response?.sections ?? []).flatMap(
+        (section: any) => section?.hits ?? []
+      );
+
+      for (const hit of rawHits) {
+        const song = hit?.result;
+        if (!song || !song.url || !song.title) continue;
+
+        const key = song.id ?? song.url;
+        if (seen.has(key)) continue;
+        seen.add(key);
+        songs.push(song);
+      }
+
+      const best = songs
+        .map((song) => ({ song, score: scoreGeniusSong(song, titles, artists) }))
+        .sort((a, b) => b.score - a.score)[0];
+      if (best && best.score >= 13) break;
+    }
   }
 
   const ranked = songs
