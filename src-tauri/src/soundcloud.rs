@@ -362,11 +362,22 @@ impl SoundCloud {
         }
 
         // 2. HLS с fMP4: init-сегмент плюс куски — из них получается .m4a.
+        //    Зашифрованные протоколы (ctr/cbc-encrypted-hls) сюда не
+        //    попадают: расшифровать сегменты вне плеера нельзя.
         let hls = transcodings
             .iter()
             .find(|t| protocol_of(t) == "hls" && mime_of(t).contains("mp4"))
-            .or_else(|| transcodings.iter().find(|t| protocol_of(t) == "hls"))
-            .ok_or("У трека нет потока, который можно скачать".to_string())?;
+            .or_else(|| transcodings.iter().find(|t| protocol_of(t) == "hls"));
+
+        let Some(hls) = hls else {
+            let all_encrypted =
+                !transcodings.is_empty() && transcodings.iter().all(is_encrypted);
+            return Err(if all_encrypted {
+                "Трек защищён DRM — скачать его нельзя, только слушать".to_string()
+            } else {
+                "У трека нет потока, который можно скачать".to_string()
+            });
+        };
 
         let playlist_url = self.manifest_url(hls).await?;
         let playlist = self.get_text(&playlist_url).await?;

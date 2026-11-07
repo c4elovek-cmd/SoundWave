@@ -2596,6 +2596,8 @@ function setupIPC() {  // Получить сохранённые настрой
     }
 
     // 2. HLS с fMP4: init-сегмент плюс куски — из них получается .m4a.
+    //    Зашифрованные протоколы (ctr/cbc-encrypted-hls) сюда не попадают:
+    //    расшифровать сегменты вне плеера нельзя.
     const hls =
       transcodings.find(
         (t) =>
@@ -2603,7 +2605,18 @@ function setupIPC() {  // Получить сохранённые настрой
           String(t?.format?.mime_type ?? "").includes("mp4")
       ) ?? transcodings.find((t) => t?.format?.protocol === "hls");
 
-    if (!hls) throw new Error("У трека нет потока, который можно скачать");
+    if (!hls) {
+      const allEncrypted =
+        transcodings.length > 0 &&
+        transcodings.every((t) =>
+          String(t?.format?.protocol ?? "").includes("encrypted")
+        );
+      throw new Error(
+        allEncrypted
+          ? "Трек защищён DRM — скачать его нельзя, только слушать"
+          : "У трека нет потока, который можно скачать"
+      );
+    }
 
     const playlistUrl = await manifestUrl(hls);
     const playlistRes = await fetch(playlistUrl);

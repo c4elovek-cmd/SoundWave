@@ -130,10 +130,12 @@ export const usePlayerStore = create<PlayerState>((set, get) => ({
   savedTimeOnDisconnect: 0,
 
   play: async (track, queue = [], index = 0, options) => {
-    // Треки с DRM браузер не играет: у SoundCloud для них только
-    // зашифрованные потоки. В обычных списках их пропускаем, в «Моей
-    // волне» оставляем — там пользователь сам решает.
-    // Скачанный файл снимает ограничение: локальный mp3 играет всегда.
+    // DRM-треки SoundCloud отдаёт с зашифрованным HLS, но hls.js умеет
+    // расшифровывать Common Encryption (ключ лежит прямо в манифесте) —
+    // поэтому играем как обычные. Если поток не расшифровывается
+    // (FairPlay), ошибка придёт от HLS — честно её показываем.
+    // Скачивание таких треков по-прежнему закрыто: бэкенд берёт для него
+    // только открытые потоки (progressive / чистый hls).
     const allowDrm = options?.allowDrm ?? false;
     // Локальный файл — приоритетный источник: играет без сети и
     // начинается мгновенно. Явный путь из опций, метка на треке
@@ -143,15 +145,6 @@ export const usePlayerStore = create<PlayerState>((set, get) => ({
       track.localPath ??
       useDownloadStore.getState().known[track.id] ??
       null;
-
-    if (track.drm && !allowDrm && !localPath) {
-      set({
-        error: "Трек защищён DRM — звук недоступен",
-        isPlaying: false,
-      });
-      logAction("skip_drm", { id: track.id, title: track.title });
-      return;
-    }
 
     // Новая попытка включения: всё, что придёт по старому токену, игнорируем.
     const token = get().playToken + 1;
@@ -175,16 +168,6 @@ export const usePlayerStore = create<PlayerState>((set, get) => ({
       index,
     });
 
-    // Из очереди DRM-треки тоже убираем — иначе следующий трек не заиграет.
-    let nextQueue = queue;
-    let nextIndex = index;
-
-    if (!allowDrm && queue.some((item) => item.drm)) {
-      nextQueue = queue.filter((item) => !item.drm);
-      const found = nextQueue.findIndex((item) => item.id === track.id);
-      nextIndex = found >= 0 ? found : 0;
-    }
-
     // Гасим предыдущий поток
     const prevHls = get().hls;
     const prevAudio = get().audio;
@@ -201,8 +184,8 @@ export const usePlayerStore = create<PlayerState>((set, get) => ({
 
     set({
       currentTrack: track,
-      queue: nextQueue.length > 0 ? nextQueue : [track],
-      queueIndex: nextIndex,
+      queue: queue.length > 0 ? queue : [track],
+      queueIndex: index,
       progress: 0,
       duration: 0,
       error: null,
@@ -297,16 +280,19 @@ export const usePlayerStore = create<PlayerState>((set, get) => ({
         if (!data.fatal) return;
         console.error("Ошибка HLS:", data.type, data.details);
 
-        // Не отдаётся ключ шифрования: у SoundCloud такие треки закрыты DRM
-        // (FairPlay или Common Encryption). Браузер их не расшифровывает,
-        // и повторные попытки только сыпят ошибками — говорим честно.
+        // Не отдаётся ключ шифрования: у SoundCloud такие треки закрыты
+        // FairPlay (`skd://`) — его не расшифровывает ни один браузер.
+        // Честно сообщаем и переходим к следующему треку, чтобы очередь
+        // не вставала на неиграбельной песне.
         if (data.details === "keyLoadError" || data.details === "keyLoadTimeOut") {
           hls.destroy();
           set({
-            error: "Трек защищён DRM — звук недоступен",
-            isPlaying: false,
+            error: "Этот трек защищён FairPlay DRM — его не может играть ни один плеер в браузере. Пропускаю…",
             hls: null,
           });
+          window.setTimeout(() => {
+            if (get().playToken === token) get().next();
+          }, 1500);
           return;
         }
 
@@ -474,31 +460,24 @@ export const usePlayerStore = create<PlayerState>((set, get) => ({
 
     logAction("next", { id: get().currentTrack?.id });
 
-    // DRM-треки браузер не расшифровывает: в обычных списках их
-    // пропускаем, иначе очередь встаёт на первом же защищённом треке.
-    const playable = (track: SCTrack) => allowDrm || !track.drm;
-
     if (isShuffled) {
-      const candidates = queue
-        .map((_, index) => index)
-        .filter((index) => playable(queue[index]));
-      if (candidates.length === 0) return;
-      const pick = candidates[Math.floor(Math.random() * candidates.length)];
+      const pick = Math.floor(Math.random() * queue.length);
       play(queue[pick], queue, pick, { allowDrm });
       return;
     }
 
-    // Ближайший играемый трек впереди.
-    for (let index = queueIndex + 1; index < queue.length; index++) {
-      if (playable(queue[index])) {
-        play(queue[index], queue, index, { allowDrm });
-        return;
-      }
+    // DRM-треки теперь тоже играем (ctr-шифрование hls.js расшифровывает),
+    // поэтому пропуск в очереди больше не нужен: неиграбельный FairPlay
+    // умрёт на загрузке ключа и честно сообщит об ошибке.
+
+    const index = queueIndex + 1;
+    if (index < queue.length) {
+      play(queue[index], queue, index, { allowDrm });
+      return;
     }
 
     if (repeat === "all") {
-      const first = queue.findIndex(playable);
-      if (first >= 0) play(queue[first], queue, first, { allowDrm });
+      play(queue[0], queue, 0, { allowDrm });
       return;
     }
 
@@ -520,11 +499,8 @@ export const usePlayerStore = create<PlayerState>((set, get) => ({
       }
 
       const offset = state.queue.length - more.length;
-      for (let index = offset; index < state.queue.length; index++) {
-        if (playable(state.queue[index])) {
-          void state.play(state.queue[index], state.queue, index, { allowDrm });
-          return;
-        }
+      if (offset < state.queue.length) {
+        void state.play(state.queue[offset], state.queue, offset, { allowDrm });
       }
     })();
   },
@@ -541,12 +517,9 @@ export const usePlayerStore = create<PlayerState>((set, get) => ({
       return;
     }
 
-    // Назад тоже пропускаем DRM-треки: иначе воспроизведение встанет.
-    for (let index = queueIndex - 1; index >= 0; index--) {
-      if (allowDrm || !queue[index].drm) {
-        play(queue[index], queue, index, { allowDrm });
-        return;
-      }
+    if (queueIndex > 0) {
+      play(queue[queueIndex - 1], queue, queueIndex - 1, { allowDrm });
+      return;
     }
 
     get().seek(0);
@@ -604,21 +577,10 @@ export const usePlayerStore = create<PlayerState>((set, get) => ({
   },
 
   addToQueue: (track) => {
-    // В очередь DRM-треки не кладём: их всё равно нечем играть.
-    if (track.drm) {
-      set({ error: "Трек защищён DRM — в очередь его не добавить" });
-      logAction("skip_drm", { id: track.id, title: track.title });
-      return;
-    }
     set((state) => ({ queue: [...state.queue, track] }));
   },
 
   playNext: (track) => {
-    if (track.drm) {
-      set({ error: "Трек защищён DRM — в очередь его не добавить" });
-      logAction("skip_drm", { id: track.id, title: track.title });
-      return;
-    }
     set((state) => {
       // Пустая очередь — просто добавляем; иначе вставляем за текущим.
       const at = state.queue.length === 0 ? 0 : state.queueIndex + 1;
@@ -696,9 +658,7 @@ export const usePlayerStore = create<PlayerState>((set, get) => ({
     }
 
     const known = new Set(state.queue.map((track) => track.id));
-    const fresh = more.filter(
-      (track) => track && !known.has(track.id) && (state.allowDrm || !track.drm)
-    );
+    const fresh = more.filter((track) => track && !known.has(track.id));
 
     if (fresh.length === 0) {
       // Пусто — источник исчерпан: больше не дёргаем его вхолостую.

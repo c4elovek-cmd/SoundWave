@@ -28,8 +28,9 @@ export interface SCTrack {
   policy?: string;
   streamable?: boolean;
   /**
-   * Трек защищён DRM: у SoundCloud для таких треков есть только
-   * зашифрованные потоки, и браузер их не играет. Помечает бэкенд.
+   * Трек защищён DRM: у SoundCloud для него есть только зашифрованные
+   * потоки (ctr — расшифровывает hls.js, cbc/FairPlay — нет). Играем
+   * такие как обычные, но скачивание бэкенд для них запрещает.
    */
   drm?: boolean;
   artwork_url: string | null;
