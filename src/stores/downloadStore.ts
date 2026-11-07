@@ -143,7 +143,7 @@ export async function downloadTrack(
 }
 
 /** Ждёт, пока бэкенд отчитается о готовности или ошибке по треку. */
-function downloadTrackAndWait(track: SCTrack): Promise<DownloadInfo> {
+export function downloadTrackAndWait(track: SCTrack): Promise<DownloadInfo> {
   return new Promise((resolve) => {
     let settled = false;
 

@@ -19,6 +19,7 @@ import {
   DownloadSimple,
   Check,
   LinkSimple,
+  Scissors,
 } from "../../lib/icons";
 import { usePlayerStore } from "../../stores/playerStore";
 import { useAppStore } from "../../stores/appStore";
@@ -33,6 +34,7 @@ import { logAction } from "../../lib/actionLog";
 import { showToast } from "../../stores/toastStore";
 import { trackUrl, userUrl } from "../../lib/soundcloudLinks";
 import VisualizerCanvas from "./VisualizerCanvas";
+import SoundpadAddModal from "../Soundpad/SoundpadAddModal";
 import "./Player.css";
 
 export default function Player() {
@@ -113,6 +115,7 @@ export default function Player() {
   } = useAppStore();
   const [localProgress, setLocalProgress] = useState(0);
   const [volumeHint, setVolumeHint] = useState<number | null>(null);
+  const [soundpadOpen, setSoundpadOpen] = useState(false);
   const rafRef = useRef<number | null>(null);
   const progressBarRef = useRef<HTMLDivElement>(null);
   const hintTimerRef = useRef<number | null>(null);
@@ -164,6 +167,11 @@ export default function Player() {
   useEffect(() => {
     setLocalProgress(progress);
   }, [progress]);
+
+  // Сменился трек — модалка саундпада относится к прежнему, закрываем.
+  useEffect(() => {
+    setSoundpadOpen(false);
+  }, [currentTrack?.id]);
 
   // Обработка клика по прогресс-бару
   const handleSeek = (e: React.MouseEvent<HTMLDivElement>) => {
@@ -324,6 +332,23 @@ export default function Player() {
         </button>
 
         <button
+          className="icon-btn player-soundpad"
+          onClick={() => {
+            logAction("soundpad.open_add", { id: currentTrack.id });
+            setSoundpadOpen(true);
+          }}
+          title={
+            currentTrack.drm
+              ? "DRM-трек нельзя сохранить в саундпад"
+              : "Добавить в саундпад — песню целиком или фрагмент"
+          }
+          aria-label="Добавить в саундпад"
+          disabled={Boolean(currentTrack.drm)}
+        >
+          <Scissors size={17} />
+        </button>
+
+        <button
           className={`icon-btn player-like ${isLiked ? "active" : ""} ${
             likeError ? "failed" : ""
           }`}
@@ -451,6 +476,10 @@ export default function Player() {
           )}
           <span>{Math.round(volumeHint * 100)}%</span>
         </div>
+      )}
+
+      {soundpadOpen && currentTrack && (
+        <SoundpadAddModal onClose={() => setSoundpadOpen(false)} />
       )}
     </div>
   );

@@ -347,6 +347,24 @@ export function createTauriBridge(): Window["electronAPI"] {
       invoke<
         { file: string; path: string; size: number; modified: number }[]
       >("list_downloads", {}),
+    /** Саундпад: сохранить трек целиком или вырезать фрагмент. */
+    soundpadSave: (
+      input: string,
+      title: string,
+      artist: string,
+      start?: number,
+      end?: number
+    ) =>
+      invoke<{ ok: boolean; path?: string; error?: string }>("soundpad_save", {
+        input,
+        title,
+        artist,
+        start: start ?? null,
+        end: end ?? null,
+      }),
+    /** Саундпад: удалить сохранённый файл. */
+    soundpadDelete: (path: string) =>
+      invoke<{ ok: boolean; error?: string }>("soundpad_delete", { path }),
     openPath: (target: string) =>
       invoke<{ ok: boolean; error?: string }>("open_path", { path: target }),
     onDownloadProgress: (

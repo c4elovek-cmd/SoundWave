@@ -189,6 +189,16 @@ if (isExternalPage) {
     ) => ipcRenderer.invoke("find-downloads", tracks),
     // Все скачанные mp3 — страница «Скачанные»
     listDownloads: () => ipcRenderer.invoke("list-downloads"),
+    // Саундпад: сохранить трек целиком или вырезать фрагмент [start, end]
+    soundpadSave: (
+      input: string,
+      title: string,
+      artist: string,
+      start?: number,
+      end?: number
+    ) => ipcRenderer.invoke("soundpad-save", input, title, artist, start, end),
+    // Саундпад: удалить сохранённый файл
+    soundpadDelete: (path: string) => ipcRenderer.invoke("soundpad-delete", path),
     onDownloadProgress: (
       callback: (info: {
         trackId: number;

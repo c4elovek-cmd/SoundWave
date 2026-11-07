@@ -30,7 +30,7 @@
       "csp": null,
       "assetProtocol": {
         "enable": true,
-        "scope": ["$DOWNLOAD/**"]
+        "scope": ["$DOWNLOAD/**", "$APPDATA/soundpad/**"]
       }
     }
   },

@@ -1296,7 +1296,8 @@ async fn install_update(app: AppHandle) -> Value {
 /// Если передан файл — открываем его папку и выделяем сам файл, а не
 /// запускаем его в плеере. Это ожидаемое поведение кнопки «Открыть»
 /// после скачивания: человек хочет увидеть, куда лёг трек.
-/// Если передан "downloads" — открывает системную папку «Загрузки».
+/// Если передан "downloads" — открывает системную папку «Загрузки»,
+/// если "soundpad" — папку саундпада в данных приложения.
 #[tauri::command]
 fn open_path(app: AppHandle, path: String) -> Result<bool, String> {
     let target = if path == "downloads" || path.is_empty() {
@@ -1304,6 +1305,8 @@ fn open_path(app: AppHandle, path: String) -> Result<bool, String> {
             .download_dir()
             .map(|p| p.to_string_lossy().to_string())
             .unwrap_or_else(|_| "shell:Downloads".to_string())
+    } else if path == "soundpad" {
+        soundpad_dir(&app)?.to_string_lossy().to_string()
     } else {
         path
     };
@@ -1881,6 +1884,143 @@ fn list_downloads(app: AppHandle) -> Result<Vec<Value>, String> {
     Ok(out)
 }
 
+// --- Саундпад ---------------------------------------------------------------
+
+/// Папка саундпада: данные приложения / soundpad.
+///
+/// Лежит отдельно от «Загрузок»: пользователь может чистить загрузки,
+/// не теряя сохранённые звуки. Интерфейс играет эти файлы через
+/// asset-протокол — область `$APPDATA/soundpad/**` в tauri.conf.json.
+fn soundpad_dir(app: &AppHandle) -> Result<std::path::PathBuf, String> {
+    let dir = app
+        .path()
+        .app_data_dir()
+        .map_err(|e| format!("Не удалось найти папку данных: {e}"))?
+        .join("soundpad");
+    std::fs::create_dir_all(&dir).map_err(|e| format!("Не удалось создать папку саундпада: {e}"))?;
+    Ok(dir)
+}
+
+/// Сохранить звук в саундпад: целый трек копируется, фрагмент вырезается ffmpeg.
+///
+/// `start`/`end` — секунды в исходном файле. Без них файл копируется как
+/// есть (трек уже скачан в mp3). Фрагмент перекодируется в mp3, чтобы
+/// границы были точными: потоковое копирование режет по ключевым кадрам.
+#[tauri::command]
+async fn soundpad_save(
+    app: AppHandle,
+    input: String,
+    title: String,
+    artist: String,
+    start: Option<f64>,
+    end: Option<f64>,
+) -> Result<Value, String> {
+    let input_path = std::path::PathBuf::from(&input);
+    if !input_path.is_file() {
+        return Err("Исходный файл не найден — скачайте трек заново".to_string());
+    }
+
+    let dir = soundpad_dir(&app)?;
+    let file_name = format!(
+        "{} - {}.mp3",
+        safe_file_name(&artist),
+        safe_file_name(&title)
+    );
+    let target = unique_path(&dir, &file_name);
+
+    match (start, end) {
+        (Some(start), Some(end)) => {
+            // Границы проверяем до запуска ffmpeg: понятная ошибка лучше
+            // молчаливого пустого файла.
+            if !start.is_finite() || !end.is_finite() || start < 0.0 || end <= start {
+                return Err("Неверные границы фрагмента".to_string());
+            }
+            let length = end - start;
+            if length > 300.0 {
+                return Err("Фрагмент длиннее 5 минут — выберите кусок короче".to_string());
+            }
+
+            // Поиск ffmpeg запускает процесс — уводим его из потока рантайма.
+            let ffmpeg = tokio::task::spawn_blocking(find_ffmpeg)
+                .await
+                .map_err(|e| e.to_string())?;
+            let Some(ffmpeg) = ffmpeg else {
+                return Err(
+                    "Для нарезки фрагментов нужен ffmpeg — установите его и повторите"
+                        .to_string(),
+                );
+            };
+
+            let output = ffmpeg_command(&ffmpeg)
+                .args([
+                    "-hide_banner",
+                    "-loglevel",
+                    "error",
+                    "-y",
+                    // -ss до -i: быстрый поиск, а при перекодировании
+                    // ffmpeg всё равно режет точно по указанной секунде.
+                    "-ss",
+                    &format!("{start:.3}"),
+                    "-i",
+                    &input,
+                    "-t",
+                    &format!("{length:.3}"),
+                    "-vn",
+                    "-codec:a",
+                    "libmp3lame",
+                    "-q:a",
+                    "2",
+                    "-metadata",
+                    &format!("title={title}"),
+                    "-metadata",
+                    &format!("artist={artist}"),
+                ])
+                .arg(&target)
+                .output()
+                .await
+                .map_err(|e| format!("Не удалось запустить ffmpeg: {e}"))?;
+
+            if !output.status.success() {
+                let _ = tokio::fs::remove_file(&target).await;
+                let stderr = String::from_utf8_lossy(&output.stderr);
+                let last = stderr.trim().lines().last().unwrap_or("неизвестная ошибка");
+                return Err(format!("Не удалось вырезать фрагмент: {last}"));
+            }
+        }
+        _ => {
+            // Целый трек: просто копия рядом с приложением.
+            tokio::fs::copy(&input_path, &target)
+                .await
+                .map_err(|e| format!("Не удалось сохранить звук: {e}"))?;
+        }
+    }
+
+    Ok(serde_json::json!({ "ok": true, "path": target.to_string_lossy() }))
+}
+
+/// Удалить файл из саундпада.
+///
+/// Принимаем только пути внутри папки саундпада: команда не должна
+/// удалять произвольные файлы, даже если интерфейс ошибётся.
+#[tauri::command]
+fn soundpad_delete(app: AppHandle, path: String) -> Result<Value, String> {
+    let dir = soundpad_dir(&app)?;
+    let target = std::path::PathBuf::from(&path);
+
+    let inside = target
+        .canonicalize()
+        .ok()
+        .zip(dir.canonicalize().ok())
+        .map(|(file, base)| file.starts_with(base))
+        .unwrap_or(false);
+    if !inside {
+        return Err("Файл лежит вне папки саундпада".to_string());
+    }
+
+    std::fs::remove_file(&target).map_err(|e| format!("Не удалось удалить файл: {e}"))?;
+    Ok(serde_json::json!({ "ok": true }))
+}
+
 // --- Окно ------------------------------------------------------------------
 
 fn main_window(app: &tauri::AppHandle) -> Option<tauri::WebviewWindow> {
@@ -2105,6 +2245,8 @@ pub fn run() {
             find_download,
             find_downloads,
             list_downloads,
+            soundpad_save,
+            soundpad_delete,
             open_path,
             show_window,
             set_fullscreen,

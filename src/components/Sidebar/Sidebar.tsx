@@ -11,6 +11,7 @@ import {
   SignOut,
   Waveform,
   DownloadSimple,
+  Apps,
 } from "../../lib/icons";
 import { useAppStore } from "../../stores/appStore";
 import { CustomTheme } from "../../lib/themes";
@@ -44,6 +45,7 @@ export default function Sidebar() {
     { id: "likes" as const, label: "Мне нравится", icon: Heart },
     { id: "uploads" as const, label: "Мои загрузки", icon: CloudArrowUp },
     { id: "downloads" as const, label: "Скачанные", icon: DownloadSimple },
+    { id: "soundpad" as const, label: "Саундпад", icon: Apps },
   ];
 
   return (

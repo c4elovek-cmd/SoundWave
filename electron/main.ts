@@ -2866,7 +2866,9 @@ function setupIPC() {  // Получить сохранённые настрой
       const resolved =
         target === "downloads" || !target
           ? app.getPath("downloads")
-          : target;
+          : target === "soundpad"
+            ? soundpadDir()
+            : target;
       if (resolved.includes(":") && !resolved.startsWith("http")) {
         let isFile = false;
         try {
@@ -3182,6 +3184,142 @@ function setupIPC() {  // Получить сохранённые настрой
 
     out.sort((a, b) => b.modified - a.modified);
     return out;
+  });
+
+  // --- Саундпад -------------------------------------------------------------
+
+  /**
+   * Папка саундпада: данные приложения / soundpad.
+   *
+   * Лежит отдельно от «Загрузок»: пользователь может чистить загрузки,
+   * не теряя сохранённые звуки.
+   */
+  function soundpadDir(): string {
+    const dir = path.join(app.getPath("userData"), "soundpad");
+    mkdirSync(dir, { recursive: true });
+    return dir;
+  }
+
+  /** Вырезать фрагмент [start, end] из файла в mp3. Бросает ошибку при неудаче. */
+  function cutFragment(
+    input: string,
+    output: string,
+    start: number,
+    end: number,
+    title: string,
+    artist: string
+  ): Promise<void> {
+    const ffmpeg = findFfmpeg();
+    if (!ffmpeg) {
+      return Promise.reject(
+        new Error("Для нарезки фрагментов нужен ffmpeg — установите его и повторите")
+      );
+    }
+
+    return new Promise((resolve, reject) => {
+      const child = spawn(
+        ffmpeg,
+        [
+          "-hide_banner",
+          "-loglevel",
+          "error",
+          "-y",
+          // -ss до -i: быстрый поиск, при перекодировании граница точная.
+          "-ss",
+          start.toFixed(3),
+          "-i",
+          input,
+          "-t",
+          (end - start).toFixed(3),
+          "-vn",
+          "-codec:a",
+          "libmp3lame",
+          "-q:a",
+          "2",
+          "-metadata",
+          `title=${title}`,
+          "-metadata",
+          `artist=${artist}`,
+          output,
+        ],
+        { windowsHide: true }
+      );
+
+      let stderr = "";
+      child.stderr?.on("data", (chunk: Buffer) => {
+        stderr += chunk.toString();
+      });
+
+      child.on("error", (e) => reject(new Error(`ffmpeg: ${e.message}`)));
+      child.on("close", (code) => {
+        if (code === 0) resolve();
+        else {
+          const last = stderr.trim().split("\n").pop() ?? `код ${code}`;
+          reject(new Error(`Не удалось вырезать фрагмент: ${last}`));
+        }
+      });
+    });
+  }
+
+  // Сохранить звук в саундпад: целый трек копируется, фрагмент режется ffmpeg.
+  ipcMain.handle(
+    "soundpad-save",
+    async (
+      _event,
+      input: string,
+      title: string,
+      artist: string,
+      start?: number,
+      end?: number
+    ) => {
+      try {
+        if (!input || !existsSync(input)) {
+          return { ok: false, error: "Исходный файл не найден — скачайте трек заново" };
+        }
+
+        const dir = soundpadDir();
+        const target = uniqueFilePath(
+          dir,
+          `${safeFileName(String(artist ?? ""))} - ${safeFileName(String(title ?? ""))}.mp3`
+        );
+
+        if (typeof start === "number" && typeof end === "number") {
+          if (!Number.isFinite(start) || !Number.isFinite(end) || start < 0 || end <= start) {
+            return { ok: false, error: "Неверные границы фрагмента" };
+          }
+          if (end - start > 300) {
+            return { ok: false, error: "Фрагмент длиннее 5 минут — выберите кусок короче" };
+          }
+          await cutFragment(input, target, start, end, String(title ?? ""), String(artist ?? ""));
+        } else {
+          // rename не работает между дисками — копируем.
+          await fsPromises.copyFile(input, target);
+        }
+
+        return { ok: true, path: target };
+      } catch (e) {
+        const message = e instanceof Error ? e.message : "Не удалось сохранить звук";
+        log.warn("Саундпад:", message);
+        return { ok: false, error: message };
+      }
+    }
+  );
+
+  // Удалить файл из саундпада — только внутри его папки.
+  ipcMain.handle("soundpad-delete", (_event, target: string) => {
+    try {
+      const dir = soundpadDir();
+      const resolved = path.resolve(String(target ?? ""));
+      const base = path.resolve(dir);
+      if (!resolved.startsWith(base + path.sep)) {
+        return { ok: false, error: "Файл лежит вне папки саундпада" };
+      }
+      unlinkSync(resolved);
+      return { ok: true };
+    } catch (e) {
+      const message = e instanceof Error ? e.message : "Не удалось удалить файл";
+      return { ok: false, error: message };
+    }
   });
 
   // Окно входа — единственное дополнительное окно приложения

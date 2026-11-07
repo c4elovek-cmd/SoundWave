@@ -103,6 +103,16 @@ declare global {
       listDownloads: () => Promise<
         { file: string; path: string; size: number; modified: number }[]
       >;
+      /** Саундпад: сохранить трек целиком или вырезать фрагмент [start, end] в секундах. */
+      soundpadSave: (
+        input: string,
+        title: string,
+        artist: string,
+        start?: number,
+        end?: number
+      ) => Promise<{ ok: boolean; path?: string; error?: string }>;
+      /** Саундпад: удалить сохранённый файл. */
+      soundpadDelete: (path: string) => Promise<{ ok: boolean; error?: string }>;
       onDownloadProgress: (
         callback: (info: {
           trackId: number;

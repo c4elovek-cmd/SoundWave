@@ -84,6 +84,9 @@ const NAMES: Record<string, string> = {
   Waveform: "graphic_eq",
   DownloadSimple: "download",
   ClipboardText: "content_paste",
+  Scissors: "content_cut",
+  Apps: "grid_view",
+  Stop: "stop",
 };
 
 /** Ось wght шрифта для каждого «веса» Phosphor. */
@@ -198,3 +201,6 @@ export const ThumbsDown = makeIcon("ThumbsDown");
 export const Waveform = makeIcon("Waveform");
 export const DownloadSimple = makeIcon("DownloadSimple");
 export const ClipboardText = makeIcon("ClipboardText");
+export const Scissors = makeIcon("Scissors");
+export const Apps = makeIcon("Apps");
+export const Stop = makeIcon("Stop");
