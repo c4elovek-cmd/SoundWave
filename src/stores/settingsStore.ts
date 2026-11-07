@@ -44,6 +44,8 @@ export interface SettingsValues {
   volume: number;
   shuffleOnStart: boolean;
   repeatOnStart: RepeatSetting;
+  /** DRM-треки не попадают в волну и очередь — только ручное включение. */
+  excludeDrmTracks: boolean;
 
   // Аудио-визуализатор в плеере
   visualizerEnabled: boolean;
@@ -83,6 +85,7 @@ export const DEFAULTS: SettingsValues = {
   volume: 0.8,
   shuffleOnStart: false,
   repeatOnStart: "off",
+  excludeDrmTracks: true,
 
   visualizerEnabled: false,
   visualizerStyle: "bars",
@@ -179,6 +182,7 @@ export const useSettingsStore = create<SettingsState>((set, get) => ({
       volume: state.volume,
       shuffleOnStart: state.shuffleOnStart,
       repeatOnStart: state.repeatOnStart,
+      excludeDrmTracks: state.excludeDrmTracks,
       visualizerEnabled: state.visualizerEnabled,
       visualizerStyle: state.visualizerStyle,
       visualizerHeight: state.visualizerHeight,

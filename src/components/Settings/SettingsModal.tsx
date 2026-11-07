@@ -690,6 +690,18 @@ export default function SettingsModal() {
                 ))}
               </div>
             </Row>
+
+            <Row
+              label="Не ставить DRM-треки в очередь"
+              hint="Защищённые треки не попадают в «Мою волну» и очередь. Включить такой трек можно только вручную"
+            >
+              <Switch
+                checked={settings.excludeDrmTracks}
+                onChange={(value) => setSetting("excludeDrmTracks", value)}
+                label="Не ставить DRM-треки в очередь"
+                {...middleReset("Не ставить DRM-треки в очередь", "excludeDrmTracks")}
+              />
+            </Row>
           </div>
 
           <div className="settings-section">

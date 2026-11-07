@@ -26,13 +26,18 @@
   --accent-subtle: rgba(255, 85, 0, 0.15);
   --accent-text: #ffffff;
 
-  --shadow-sm: 0 2px 8px rgba(0, 0, 0, 0.3);
-  --shadow-md: 0 4px 16px rgba(0, 0, 0, 0.4);
-  --shadow-lg: 0 8px 32px rgba(0, 0, 0, 0.5);
+  /* Глубина как иерархия: двухслойные тени — узкая контактная тень
+     (предмет «стоит» на поверхности) плюс широкий рассеянный ореол.
+     Тренд 2026: мягкий объём вместо плоских плашек и цветных гало. */
+  --shadow-sm: 0 1px 2px rgba(0, 0, 0, 0.2), 0 2px 8px rgba(0, 0, 0, 0.24);
+  --shadow-md: 0 2px 6px rgba(0, 0, 0, 0.24), 0 12px 32px rgba(0, 0, 0, 0.32);
+  --shadow-lg: 0 4px 12px rgba(0, 0, 0, 0.28), 0 24px 56px rgba(0, 0, 0, 0.44);
 
-  --radius-sm: 4px;
-  --radius-md: 8px;
-  --radius-lg: 12px;
+  /* Скругления-сквирклы: чуть крупнее «коробочных» — поверхность читается
+     мягче, но не превращается в пузырь. */
+  --radius-sm: 6px;
+  --radius-md: 10px;
+  --radius-lg: 16px;
   --radius-full: 9999px;
 
   --sidebar-width: 220px;
@@ -73,9 +78,9 @@
   --accent-subtle: rgba(255, 85, 0, 0.1);
   --accent-text: #ffffff;
 
-  --shadow-sm: 0 2px 8px rgba(0, 0, 0, 0.08);
-  --shadow-md: 0 4px 16px rgba(0, 0, 0, 0.12);
-  --shadow-lg: 0 8px 32px rgba(0, 0, 0, 0.16);
+  --shadow-sm: 0 1px 2px rgba(0, 0, 0, 0.05), 0 2px 8px rgba(0, 0, 0, 0.08);
+  --shadow-md: 0 2px 6px rgba(0, 0, 0, 0.07), 0 12px 32px rgba(0, 0, 0, 0.12);
+  --shadow-lg: 0 4px 12px rgba(0, 0, 0, 0.08), 0 24px 56px rgba(0, 0, 0, 0.16);
 }
 
 /* === ФИОЛЕТОВАЯ ТЕМА === */
@@ -102,9 +107,9 @@
   --accent-subtle: rgba(168, 85, 247, 0.15);
   --accent-text: #ffffff;
 
-  --shadow-sm: 0 2px 8px rgba(0, 0, 0, 0.4);
-  --shadow-md: 0 4px 16px rgba(0, 0, 0, 0.5);
-  --shadow-lg: 0 8px 32px rgba(0, 0, 0, 0.6);
+  --shadow-sm: 0 1px 2px rgba(0, 0, 0, 0.32), 0 2px 8px rgba(0, 0, 0, 0.4);
+  --shadow-md: 0 2px 6px rgba(0, 0, 0, 0.38), 0 12px 32px rgba(0, 0, 0, 0.5);
+  --shadow-lg: 0 4px 12px rgba(0, 0, 0, 0.42), 0 24px 56px rgba(0, 0, 0, 0.6);
 }
 
 /* === ЗЕЛЁНАЯ ТЕМА === */
@@ -131,7 +136,7 @@
   --accent-subtle: rgba(29, 185, 84, 0.15);
   --accent-text: #ffffff;
 
-  --shadow-sm: 0 2px 8px rgba(0, 0, 0, 0.3);
-  --shadow-md: 0 4px 16px rgba(0, 0, 0, 0.4);
-  --shadow-lg: 0 8px 32px rgba(0, 0, 0, 0.5);
+  --shadow-sm: 0 1px 2px rgba(0, 0, 0, 0.28), 0 2px 8px rgba(0, 0, 0, 0.32);
+  --shadow-md: 0 2px 6px rgba(0, 0, 0, 0.32), 0 12px 32px rgba(0, 0, 0, 0.42);
+  --shadow-lg: 0 4px 12px rgba(0, 0, 0, 0.36), 0 24px 56px rgba(0, 0, 0, 0.52);
 }

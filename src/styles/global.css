@@ -142,6 +142,29 @@ input {
   white-space: nowrap;
 }
 
+/* Клавиатурный фокус виден всегда, мышиный — не мешает.
+   Браузерные дефолты здесь не годятся: свой ринг в цвет акцента. */
+:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 2px;
+  border-radius: var(--radius-sm);
+}
+
+/* Выделение текста в фирменном цвете: дефолтный синий выбивается
+   из любой темы. */
+::selection {
+  background: var(--accent-subtle);
+  color: var(--text-primary);
+}
+
+/* Заголовки страниц: плотнее трекинг — крупный кегль с дефолтным
+   межбуквенным расстоянием выглядит рыхло. */
+.page-title,
+.detail-title,
+.wave-title {
+  letter-spacing: -0.02em;
+}
+
 .flex-center {
   display: flex;
   align-items: center;

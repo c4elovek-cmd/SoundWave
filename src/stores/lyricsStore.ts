@@ -1,6 +1,7 @@
 import { create } from "zustand";
 import { SCTrack } from "../types/soundcloud";
 import { errorText } from "../lib/errorText";
+import { findSiblingTitle } from "../lib/siblingLyrics";
 
 export interface LyricsResult {
   found: boolean;
@@ -152,12 +153,33 @@ export const useLyricsStore = create<LyricsState>((set, get) => ({
         throw new Error("Мост к Electron недоступен");
       }
 
-      const response = await window.electronAPI.getLyrics(
-        track.title,
-        track.user?.username ?? "",
+      const searchTitle = track.title;
+      const searchArtist = track.user?.username ?? "";
+
+      let response = await window.electronAPI.getLyrics(
+        searchTitle,
+        searchArtist,
         track.description ?? "",
         track.duration ?? 0
       );
+
+      // Текст не нашёлся — возможно, это перезалив, переименовавший песню:
+      // в названии стоит строка из текста («enveel время на часах уже 2»),
+      // а оригинал называется совсем иначе («2:00»). Ищем другой перезалив
+      // той же песни и пробуем ещё раз с его названием и артистом.
+      if (!response.found) {
+        const sibling = await findSiblingTitle(track);
+        if (sibling && currentRequest === requestId) {
+          const retry = await window.electronAPI.getLyrics(
+            sibling.title,
+            sibling.artist,
+            track.description ?? "",
+            track.duration ?? 0
+          );
+          if (currentRequest !== requestId) return;
+          if (retry.found) response = retry;
+        }
+      }
 
       if (currentRequest !== requestId) return;
 
@@ -212,11 +234,26 @@ export const useLyricsStore = create<LyricsState>((set, get) => ({
         ? (state.result?.artist ?? track.user?.username ?? "")
         : (track.user?.username ?? "");
 
-      const response = await window.electronAPI.getSyncedLyrics(
+      let response = await window.electronAPI.getSyncedLyrics(
         resolvedTitle,
         resolvedArtist,
         track.duration ?? 0
       );
+
+      // Текст нашёлся по каноническому названию, а тайминги по нему нет,
+      // и по сырому тоже — пробуем через перезалив-сиблинга («enveel
+      // время на часах уже 2» → «2:00 - enveel»).
+      if (!response.found) {
+        const sibling = await findSiblingTitle(track);
+        if (sibling) {
+          const retry = await window.electronAPI.getSyncedLyrics(
+            sibling.title,
+            sibling.artist,
+            track.duration ?? 0
+          );
+          if (retry.found) response = retry;
+        }
+      }
 
       if (get().trackId !== track.id) return;
       set({ synced: response, syncLoading: false });

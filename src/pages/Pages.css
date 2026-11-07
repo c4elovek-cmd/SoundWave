@@ -373,13 +373,19 @@
   display: flex;
   align-items: center;
   justify-content: center;
-  transition: transform var(--transition-fast), background var(--transition-fast);
+  transition:
+    transform 260ms cubic-bezier(0.22, 1, 0.36, 1),
+    background var(--transition-fast);
   box-shadow: var(--shadow-md);
 }
 
 .big-play:hover {
   transform: scale(1.06);
   background: var(--accent-hover);
+}
+
+.big-play:active {
+  transform: scale(0.94);
 }
 
 .link-btn {

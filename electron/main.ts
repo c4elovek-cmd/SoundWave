@@ -774,6 +774,47 @@ function numeralEquivalent(wantTitle: string, trackTitle: string): boolean {
   return track.length > 0 && track === spelled;
 }
 
+/**
+ * Варианты написания с двоякими транслитерациями.
+ *
+ * «Кашалот» перезаливы пишут kashalot, а сама группа — cachalot:
+ * русская К даёт k или c, ш — sh или ch. Правило чисто механическое,
+ * варианты идут только в поисковые запросы — отбор записей остаётся
+ * строгим (совпадение артиста, длительность, пороги оценки).
+ */
+function spellingVariants(title: string): string[] {
+  const normalized = normalizeGeniusText(title);
+  const out: string[] = [];
+
+  for (const word of normalized.split(" ")) {
+    if (word.length < 4) continue;
+
+    const candidates: string[] = [];
+
+    // ш → ch: «kashalot» → «kachalot»
+    if (word.includes("sh")) candidates.push(word.replace("sh", "ch"));
+
+    // К → c: латинские заимствования часто пишут через c.
+    if (word.startsWith("k") && word.length - 1 >= 3) {
+      candidates.push("c" + word.slice(1));
+    }
+
+    // Обе замены разом: «kashalot» → «kachalot» → «cachalot».
+    if (word.includes("sh")) {
+      const stepped = word.replace("sh", "ch");
+      if (stepped.startsWith("k") && stepped.length - 1 >= 3) {
+        candidates.push("c" + stepped.slice(1));
+      }
+    }
+
+    for (const variant of candidates) {
+      if (variant !== word && !out.includes(variant)) out.push(variant);
+    }
+  }
+
+  return out;
+}
+
 /** Варианты названия: исходное, очищенное, часть после тире и без хвоста. */
 function titleVariants(title: string): string[] {
   const variants = new Set<string>();
@@ -1398,6 +1439,14 @@ function lrcArtistMatches(entry: any, title: string, artist: string): boolean {
 
   if (trackArtist.length >= 4 && wantTitle.includes(trackArtist)) return true;
 
+  // Артист написан в названии слитно: «cachalot ondaandar» — это
+  // «Кашалот» + ONDA ANDAR, пробелы при склейке потерялись.
+  const wantTitleJoined = wantTitle.replace(/ /g, "");
+  const trackArtistJoined = trackArtist.replace(/ /g, "");
+  if (trackArtistJoined.length >= 4 && wantTitleJoined.includes(trackArtistJoined)) {
+    return true;
+  }
+
   return artistNamesMatch(artist, rawTrackArtist);
 }
 
@@ -1472,7 +1521,14 @@ function scoreLrcTrack(entry: any, title: string, artist: string, durationMs: nu
   // Артист записи назван в нашем названии трека — сильный признак, что это
   // та же песня. Нужен и когда артист трека известен: у перезаливов в теге
   // стоит ник загрузившего («nsssive»), а не настоящий исполнитель.
-  if (trackArtist.length >= 4 && wantTitle.includes(trackArtist)) {
+  // Слитное написание тоже считаем: «cachalot ondaandar» — это
+  // «Кашалот» + ONDA ANDAR без пробела.
+  const wantTitleJoined = wantTitle.replace(/ /g, "");
+  const trackArtistJoined = trackArtist.replace(/ /g, "");
+  const artistInTitle =
+    (trackArtist.length >= 4 && wantTitle.includes(trackArtist)) ||
+    (trackArtistJoined.length >= 4 && wantTitleJoined.includes(trackArtistJoined));
+  if (artistInTitle) {
     score += 8;
   }
 
@@ -1484,6 +1540,9 @@ function scoreLrcTrack(entry: any, title: string, artist: string, durationMs: nu
       // «k0vertessence». Исполнитель тот же, просто тег полнее.
       score += 4;
     }
+  } else if (!wantArtist && artistInTitle) {
+    // Артиста в теге трека нет, зато он назван в самом названии.
+    score += 8;
   }
 
   // Длительность помогает выбрать нужную версию среди ремиксов.
@@ -1603,6 +1662,51 @@ async function getLrclibPlainLyrics(
         if (best && best.score >= 18) break;
       }
       if (best && best.score >= 18) break;
+    }
+
+    // Второй проход — варианты написания с двоякими транслитерациями
+    // («kashalot» → «cachalot»). Работает, только когда обычный поиск
+    // ничего не нашёл; фильтры отбора не ослабляются.
+    if (!best) {
+      const variants = spellingVariants(title);
+      const spellArtists = [artist, ""];
+      spellLoop: for (const variant of variants) {
+        for (const a of spellArtists) {
+          const url = a
+            ? `${LRCLIB_API}?track_name=${encodeURIComponent(variant)}&artist_name=${encodeURIComponent(a)}`
+            : `${LRCLIB_API}?track_name=${encodeURIComponent(variant)}`;
+
+          let res: Response;
+          try {
+            res = await fetch(url, {
+              headers: { "User-Agent": LRCLIB_UA, Accept: "application/json" },
+              signal: AbortSignal.timeout(LRCLIB_TIMEOUT),
+            });
+          } catch {
+            continue;
+          }
+          if (!res.ok) continue;
+
+          const list = await res.json().catch(() => null);
+          if (!Array.isArray(list)) continue;
+
+          for (const entry of list) {
+            if (!entry || typeof entry.plainLyrics !== "string") continue;
+            if (entry.plainLyrics.trim().length < 40) continue;
+
+            // Шлюз — по варианту запроса: он и привёл к записи.
+            if (!lrcTitleMatches(entry, variant)) continue;
+
+            const score = Math.max(
+              scoreLrcTrack(entry, title, artist, durationMs),
+              scoreLrcTrack(entry, variant, artist, durationMs)
+            );
+            if (isBetterLrc(score, entry, best, durationMs)) best = { entry, score };
+          }
+
+          if (best && best.score >= 18) break spellLoop;
+        }
+      }
     }
 
     // Fallback: Karalyr — LRCLIB-совместимый сервис.
@@ -1758,6 +1862,59 @@ async function getSyncedLyrics(
         if (best && best.score >= 18) break;
       }
       if (best && best.score >= 18) break;
+    }
+
+    // Второй проход — варианты написания с двоякими транслитерациями
+    // («kashalot» → «cachalot»). Работает, только когда обычный поиск
+    // ничего не нашёл; фильтры отбора не ослабляются.
+    if (!best) {
+      const variants = spellingVariants(title);
+      const spellArtists = [artist, ""];
+      spellLoop: for (const variant of variants) {
+        for (const a of spellArtists) {
+          const url =
+            `${LRCLIB_API}?track_name=${encodeURIComponent(variant)}` +
+            (a ? `&artist_name=${encodeURIComponent(a)}` : "");
+
+          let res: Response;
+          try {
+            res = await fetch(url, {
+              headers: { "User-Agent": LRCLIB_UA, Accept: "application/json" },
+              signal: AbortSignal.timeout(LRCLIB_TIMEOUT),
+            });
+          } catch {
+            continue;
+          }
+          if (!res.ok) continue;
+
+          const list = await res.json().catch(() => null);
+          if (!Array.isArray(list)) continue;
+
+          for (const entry of list) {
+            if (!entry || typeof entry.syncedLyrics !== "string") continue;
+            if (entry.syncedLyrics.trim().length <= 20) continue;
+
+            // Шлюз — по варианту запроса: он и привёл к записи.
+            if (!lrcTitleMatches(entry, variant)) continue;
+
+            const trackName = String(entry.trackName ?? "");
+            if (
+              !numeralEquivalent(title, trackName) &&
+              !versionMarkersCompatible(title, trackName)
+            ) {
+              continue;
+            }
+
+            const score = Math.max(
+              scoreLrcTrack(entry, title, artist, durationMs),
+              scoreLrcTrack(entry, variant, artist, durationMs)
+            );
+            if (isBetterLrc(score, entry, best, durationMs)) best = { entry, score };
+          }
+
+          if (best && best.score >= 18) break spellLoop;
+        }
+      }
     }
 
     // Fallback: Karalyr — LRCLIB-совместимый сервис с word-synced караоке.

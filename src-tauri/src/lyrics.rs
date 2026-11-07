@@ -1427,6 +1427,75 @@ async fn get_lrclib_plain_lyrics(title: &str, artist: &str, duration_ms: f64) ->
         }
     }
 
+    // Второй проход — варианты написания с двоякими транслитерациями
+    // («kashalot» → «cachalot»). До него доходит дело, только когда
+    // обычный поиск не нашёл ничего; записи всё равно проходят строгие
+    // фильтры отбора, так что чужой текст это не пропустит.
+    if best.is_none() {
+        let variants = spelling_variants(title);
+        if !variants.is_empty() {
+            let spell_artists = [artist.to_string(), String::new()];
+            'spell: for variant in &variants {
+                for a in &spell_artists {
+                    let url = if a.is_empty() {
+                        format!("{LRCLIB_API}?track_name={}", encode_uri_component(variant))
+                    } else {
+                        format!(
+                            "{LRCLIB_API}?track_name={}&artist_name={}",
+                            encode_uri_component(variant),
+                            encode_uri_component(a)
+                        )
+                    };
+
+                    let Ok(response) = HTTP
+                        .get(&url)
+                        .header("User-Agent", LRCLIB_UA)
+                        .header("Accept", "application/json")
+                        .timeout(LRCLIB_TIMEOUT)
+                        .send()
+                        .await
+                    else {
+                        continue;
+                    };
+                    if !response.status().is_success() {
+                        continue;
+                    }
+                    let Ok(list) = response.json::<Value>().await else {
+                        continue;
+                    };
+                    let Some(items) = list.as_array() else {
+                        continue;
+                    };
+
+                    for entry in items {
+                        let Some(plain) = entry.get("plainLyrics").and_then(|v| v.as_str()) else {
+                            continue;
+                        };
+                        if plain.trim().chars().count() < 40 {
+                            continue;
+                        }
+
+                        // Шлюз — по варианту запроса: он и привёл к записи.
+                        if !lrc_title_matches(entry, variant) {
+                            continue;
+                        }
+
+                        // Оценка по обоим названиям: варианту и исходному.
+                        let score = score_lrc_track(entry, title, artist, duration_ms)
+                            .max(score_lrc_track(entry, variant, artist, duration_ms));
+                        if is_better_lrc(score, entry, &best, duration_ms) {
+                            best = Some((score, entry.clone()));
+                        }
+                    }
+
+                    if best.as_ref().map(|(s, _)| *s >= 18.0).unwrap_or(false) {
+                        break 'spell;
+                    }
+                }
+            }
+        }
+    }
+
     // Fallback: Karalyr — LRCLIB-совместимый, отдаёт plain-текст тоже.
     if best.is_none() {
         let url = format!(
@@ -1565,6 +1634,55 @@ fn version_markers_compatible(want_title: &str, track_title: &str) -> bool {
     want_markers.iter().all(|m| track_markers.contains(m))
 }
 
+/// Варианты написания с двоякими транслитерациями.
+///
+/// «Кашалот» перезаливы пишут kashalot, а сама группа — cachalot:
+/// русская К даёт k или c, ш — sh или ch. Правило чисто механическое,
+/// варианты идут только в поисковые запросы — отбор записей остаётся
+/// строгим (совпадение артиста, длительность, пороги оценки).
+fn spelling_variants(title: &str) -> Vec<String> {
+    let normalized = normalize_text(title);
+    let mut out: Vec<String> = Vec::new();
+
+    for word in normalized.split(' ') {
+        if word.chars().count() < 4 {
+            continue;
+        }
+
+        let mut candidates: Vec<String> = Vec::new();
+
+        // ш → ch: «kashalot» → «kachalot»
+        if word.contains("sh") {
+            candidates.push(word.replace("sh", "ch"));
+        }
+
+        // К → c: латинские заимствования часто пишут через c.
+        if let Some(rest) = word.strip_prefix('k') {
+            if rest.chars().count() >= 3 {
+                candidates.push(format!("c{rest}"));
+            }
+        }
+
+        // Обе замены разом: «kashalot» → «kachalot» → «cachalot».
+        if word.contains("sh") {
+            let stepped = word.replace("sh", "ch");
+            if let Some(rest) = stepped.strip_prefix('k') {
+                if rest.chars().count() >= 3 {
+                    candidates.push(format!("c{rest}"));
+                }
+            }
+        }
+
+        for variant in candidates {
+            if variant != word && !out.contains(&variant) {
+                out.push(variant);
+            }
+        }
+    }
+
+    out
+}
+
 /// Совпадает ли название записи LRCLIB с искомым.
 ///
 /// Отдельно от оценки: одной только близкой длительности и знакомого
@@ -1618,6 +1736,17 @@ fn lrc_artist_matches(entry: &Value, title: &str, artist: &str) -> bool {
     }
 
     if track_artist.chars().count() >= 4 && want_title.contains(&track_artist) {
+        return true;
+    }
+
+    // Артист написан в названии слитно: «cachalot ondaandar» — это
+    // «Кашалот» + ONDA ANDAR, пробелы при склейке потерялись. Сравниваем
+    // без пробелов с обеих сторон.
+    let want_title_joined = want_title.replace(' ', "");
+    let track_artist_joined = track_artist.replace(' ', "");
+    if track_artist_joined.chars().count() >= 4
+        && want_title_joined.contains(&track_artist_joined)
+    {
         return true;
     }
 
@@ -1714,8 +1843,15 @@ fn score_lrc_track(entry: &Value, title: &str, artist: &str, duration_ms: f64) -
     // та же песня. Нужен и когда артист трека известен: у перезаливов в теге
     // стоит ник загрузившего («nsssive»), а не настоящий исполнитель, и без
     // этой проверки побеждает чужая песня того же исполнителя с похожей
-    // длительностью.
-    if track_artist.chars().count() >= 4 && want_title.contains(&track_artist) {
+    // длительностью. Слитное написание тоже считаем: «cachalot ondaandar»
+    // — это «Кашалот» + ONDA ANDAR без пробела.
+    let want_title_joined = want_title.replace(' ', "");
+    let track_artist_joined = track_artist.replace(' ', "");
+    let artist_in_title = track_artist.chars().count() >= 4
+        && (want_title.contains(&track_artist)
+            || (track_artist_joined.chars().count() >= 4
+                && want_title_joined.contains(&track_artist_joined)));
+    if artist_in_title {
         score += 8.0;
     }
 
@@ -1727,10 +1863,7 @@ fn score_lrc_track(entry: &Value, title: &str, artist: &str, duration_ms: f64) -
             // «k0vertessence». Исполнитель тот же, просто тег полнее.
             score += 4.0;
         }
-    } else if want_artist.is_empty()
-        && track_artist.chars().count() >= 4
-        && want_title.contains(&track_artist)
-    {
+    } else if want_artist.is_empty() && artist_in_title {
         // Артиста в теге трека нет (или там заглушка «*»), зато он назван в
         // самом названии: «RANE/ШИПЫ ONDA ANDAR #2016» на LRCLIB лежит как
         // «RANE — ONDA ANDAR». Совпадение артиста внутри названия — сильный
@@ -1886,6 +2019,83 @@ pub async fn get_synced_lyrics(title: &str, artist: &str, duration_ms: f64) -> S
 
             if best.as_ref().map(|(s, _)| *s >= 18.0).unwrap_or(false) {
                 break 'outer;
+            }
+        }
+    }
+
+    // Второй проход — варианты написания с двоякими транслитерациями
+    // («kashalot» → «cachalot»). Работает, только когда обычный поиск
+    // ничего не нашёл; фильтры отбора не ослабляются.
+    if best.is_none() {
+        let variants = spelling_variants(title);
+        if !variants.is_empty() {
+            let spell_artists = [artist.to_string(), String::new()];
+            'spell: for variant in &variants {
+                for a in &spell_artists {
+                    let url = if a.is_empty() {
+                        format!("{LRCLIB_API}?track_name={}", encode_uri_component(variant))
+                    } else {
+                        format!(
+                            "{LRCLIB_API}?track_name={}&artist_name={}",
+                            encode_uri_component(variant),
+                            encode_uri_component(a)
+                        )
+                    };
+
+                    let Ok(response) = HTTP
+                        .get(&url)
+                        .header("User-Agent", LRCLIB_UA)
+                        .header("Accept", "application/json")
+                        .timeout(LRCLIB_TIMEOUT)
+                        .send()
+                        .await
+                    else {
+                        continue;
+                    };
+                    if !response.status().is_success() {
+                        continue;
+                    }
+                    let Ok(list) = response.json::<Value>().await else {
+                        continue;
+                    };
+                    let Some(items) = list.as_array() else {
+                        continue;
+                    };
+
+                    for entry in items {
+                        let Some(synced) = entry.get("syncedLyrics").and_then(|v| v.as_str()) else {
+                            continue;
+                        };
+                        if synced.trim().chars().count() <= 20 {
+                            continue;
+                        }
+
+                        // Шлюз — по варианту запроса: он и привёл к записи.
+                        if !lrc_title_matches(entry, variant) {
+                            continue;
+                        }
+
+                        let track_name = entry
+                            .get("trackName")
+                            .and_then(|v| v.as_str())
+                            .unwrap_or("");
+                        if !numeral_equivalent(title, track_name)
+                            && !version_markers_compatible(title, track_name)
+                        {
+                            continue;
+                        }
+
+                        let score = score_lrc_track(entry, title, artist, duration_ms)
+                            .max(score_lrc_track(entry, variant, artist, duration_ms));
+                        if is_better_lrc(score, entry, &best, duration_ms) {
+                            best = Some((score, entry.clone()));
+                        }
+                    }
+
+                    if best.as_ref().map(|(s, _)| *s >= 18.0).unwrap_or(false) {
+                        break 'spell;
+                    }
+                }
             }
         }
     }
@@ -2592,6 +2802,41 @@ mod tests {
             titles.iter().any(|t| t == "четыре тридцать"),
             "нет варианта словами: {titles:?}"
         );
+    }
+
+    #[test]
+    fn builds_spelling_variants_for_kashalot() {
+        // «Кашалот» перезаливы пишут kashalot, группа — cachalot:
+        // К даёт k или c, ш — sh или ch. Вариант «cachalot» обязан
+        // появиться, иначе LRCLIB по запросу «kashalot» пуст.
+        let variants = spelling_variants("kashalot ondaandar");
+        assert!(
+            variants.iter().any(|v| v == "cachalot"),
+            "нет варианта cachalot: {variants:?}"
+        );
+        assert!(
+            variants.iter().any(|v| v == "kachalot"),
+            "нет варианта kachalot: {variants:?}"
+        );
+    }
+
+    #[test]
+    fn accepts_artist_glued_into_reupload_title() {
+        // «cachalot ondaandar» = «Кашалот» + ONDA ANDAR, пробел потерялся.
+        // Артист записи написан в названии слитно — запись своя, хотя тег
+        // артиста трека («why-sky») с настоящим исполнителем не связан.
+        let entry = serde_json::json!({
+            "trackName": "cachalot",
+            "artistName": "ONDA ANDAR",
+            "duration": 121.0
+        });
+        assert!(
+            lrc_artist_matches(&entry, "kashalot ondaandar", "why-sky"),
+            "слитный артист в названии не распознан"
+        );
+
+        let score = score_lrc_track(&entry, "kashalot ondaandar", "why-sky", 121_000.0);
+        assert!(score >= 6.0, "запись должна проходить, получили {score}");
     }
 
     #[test]

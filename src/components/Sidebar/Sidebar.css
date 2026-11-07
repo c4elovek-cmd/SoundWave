@@ -104,6 +104,9 @@
 
 .nav-item.active {
   color: var(--text-primary);
+  /* Активный раздел — «пилюля» как у Spotify: раздел читается до
+     чтения текста, текущее место в интерфейсе видно периферией. */
+  background: var(--bg-hover);
 }
 
 .nav-item.active .nav-icon {

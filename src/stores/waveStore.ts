@@ -11,6 +11,7 @@ import { SCTrack } from "../types/soundcloud";
 import { collectWaveCandidates, loadWaveSeed, WaveMode, WaveSeed } from "../lib/wave";
 import { logAction } from "../lib/actionLog";
 import { usePlayerStore } from "./playerStore";
+import { useSettingsStore } from "./settingsStore";
 import { errorText } from "../lib/errorText";
 
 const MODE_KEY = "sw-wave-mode";
@@ -122,7 +123,7 @@ export const useWaveStore = create<WaveState>((set, get) => ({
       set({ seed });
 
       const { played, disliked, artistScores, mode } = get();
-      const tracks = await collectWaveCandidates({
+      const collected = await collectWaveCandidates({
         seed,
         mode,
         exclude: new Set([...played, ...disliked]),
@@ -130,10 +131,16 @@ export const useWaveStore = create<WaveState>((set, get) => ({
         limit: 14,
       });
 
+      // Настройка «исключать DRM»: защищённые треки не попадают в волну.
+      const excludeDrm = useSettingsStore.getState().excludeDrmTracks;
+      const tracks = excludeDrm ? collected.filter((track) => !track.drm) : collected;
+
       if (tracks.length === 0) {
         set({
           loading: false,
-          error: "Не удалось собрать волну. Попробуй ещё раз — SoundCloud мог не ответить.",
+          error: collected.length > 0
+            ? "Все кандидаты волны защищены DRM — отключи исключение DRM в настройках плеера"
+            : "Не удалось собрать волну. Попробуй ещё раз — SoundCloud мог не ответить.",
         });
         return;
       }
@@ -202,13 +209,17 @@ export const useWaveStore = create<WaveState>((set, get) => ({
     const player = usePlayerStore.getState();
     const inQueue = new Set(player.queue.map((track) => track.id));
 
-    return collectWaveCandidates({
+    const collected = await collectWaveCandidates({
       seed,
       mode,
       exclude: new Set([...played, ...disliked, ...inQueue]),
       blockedArtists: blockedArtists(artistScores),
       limit: 12,
     });
+
+    // Настройка «исключать DRM»: защищённые треки не доливаются в волну.
+    const excludeDrm = useSettingsStore.getState().excludeDrmTracks;
+    return excludeDrm ? collected.filter((track) => !track.drm) : collected;
   },
 
   resetHistory: () => {

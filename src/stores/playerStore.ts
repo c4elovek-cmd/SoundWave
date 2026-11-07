@@ -4,6 +4,7 @@ import Hls from "hls.js";
 import { scApi } from "../lib/soundcloud-api";
 import { localFileUrl } from "../lib/localFiles";
 import { useDownloadStore } from "./downloadStore";
+import { useSettingsStore } from "./settingsStore";
 import { logAction } from "../lib/actionLog";
 import { errorText } from "../lib/errorText";
 
@@ -168,6 +169,21 @@ export const usePlayerStore = create<PlayerState>((set, get) => ({
       index,
     });
 
+    // Из очереди убираем DRM-треки, если включено исключение: сам трек
+    // играет (его выбрал пользователь вручную), но в автопроигрывание
+    // после него защищённые не подмешиваются.
+    const excludeDrm = useSettingsStore.getState().excludeDrmTracks;
+    const queuePassesDrm = (item: SCTrack) => !excludeDrm || !item.drm || item.id === track.id;
+
+    let nextQueue = queue.filter(queuePassesDrm);
+    let nextIndex = index;
+
+    if (!nextQueue.some((item) => item.id === track.id)) {
+      // Трек выфильтровался из очереди — оставляем его одним.
+      nextQueue = [track, ...nextQueue];
+      nextIndex = 0;
+    }
+
     // Гасим предыдущий поток
     const prevHls = get().hls;
     const prevAudio = get().audio;
@@ -184,8 +200,8 @@ export const usePlayerStore = create<PlayerState>((set, get) => ({
 
     set({
       currentTrack: track,
-      queue: queue.length > 0 ? queue : [track],
-      queueIndex: index,
+      queue: nextQueue.length > 0 ? nextQueue : [track],
+      queueIndex: nextIndex,
       progress: 0,
       duration: 0,
       error: null,
@@ -577,10 +593,20 @@ export const usePlayerStore = create<PlayerState>((set, get) => ({
   },
 
   addToQueue: (track) => {
+    if (track.drm && useSettingsStore.getState().excludeDrmTracks) {
+      set({ error: "DRM-треки исключены из очереди — настройка в плеере" });
+      logAction("skip_drm_queue", { id: track.id, title: track.title });
+      return;
+    }
     set((state) => ({ queue: [...state.queue, track] }));
   },
 
   playNext: (track) => {
+    if (track.drm && useSettingsStore.getState().excludeDrmTracks) {
+      set({ error: "DRM-треки исключены из очереди — настройка в плеере" });
+      logAction("skip_drm_queue", { id: track.id, title: track.title });
+      return;
+    }
     set((state) => {
       // Пустая очередь — просто добавляем; иначе вставляем за текущим.
       const at = state.queue.length === 0 ? 0 : state.queueIndex + 1;
@@ -658,7 +684,14 @@ export const usePlayerStore = create<PlayerState>((set, get) => ({
     }
 
     const known = new Set(state.queue.map((track) => track.id));
-    const fresh = more.filter((track) => track && !known.has(track.id));
+    // Настройка «исключать DRM»: защищённые треки не доливаются в очередь.
+    const excludeDrm = useSettingsStore.getState().excludeDrmTracks;
+    const fresh = more.filter(
+      (track) =>
+        track &&
+        !known.has(track.id) &&
+        (!excludeDrm || !track.drm)
+    );
 
     if (fresh.length === 0) {
       // Пусто — источник исчерпан: больше не дёргаем его вхолостую.
