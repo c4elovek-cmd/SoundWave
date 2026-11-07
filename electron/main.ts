@@ -791,19 +791,28 @@ function spellingVariants(title: string): string[] {
 
     const candidates: string[] = [];
 
-    // ш → ch: «kashalot» → «kachalot»
-    if (word.includes("sh")) candidates.push(word.replace("sh", "ch"));
+    // «кашалот» и «kashalot» — одно слово в разных алфавитах: кириллицу
+    // сначала транслитерируем, иначе замены sh/k до неё не доберутся
+    // («кашалот» → «kashalot» → «cachalot»). Сам транслит тоже вариант:
+    // запись может лежать под транслитерированным названием.
+    const translit = translitRu(word);
+    if (translit !== word) candidates.push(translit);
 
-    // К → c: латинские заимствования часто пишут через c.
-    if (word.startsWith("k") && word.length - 1 >= 3) {
-      candidates.push("c" + word.slice(1));
-    }
+    for (const base of [word, translit]) {
+      // ш → ch: «kashalot» → «kachalot»
+      if (base.includes("sh")) candidates.push(base.replace("sh", "ch"));
 
-    // Обе замены разом: «kashalot» → «kachalot» → «cachalot».
-    if (word.includes("sh")) {
-      const stepped = word.replace("sh", "ch");
-      if (stepped.startsWith("k") && stepped.length - 1 >= 3) {
-        candidates.push("c" + stepped.slice(1));
+      // К → c: латинские заимствования часто пишут через c.
+      if (base.startsWith("k") && base.length - 1 >= 3) {
+        candidates.push("c" + base.slice(1));
+      }
+
+      // Обе замены разом: «kashalot» → «kachalot» → «cachalot».
+      if (base.includes("sh")) {
+        const stepped = base.replace("sh", "ch");
+        if (stepped.startsWith("k") && stepped.length - 1 >= 3) {
+          candidates.push("c" + stepped.slice(1));
+        }
       }
     }
 

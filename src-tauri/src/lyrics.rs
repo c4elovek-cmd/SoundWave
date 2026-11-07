@@ -1742,24 +1742,35 @@ fn spelling_variants(title: &str) -> Vec<String> {
 
         let mut candidates: Vec<String> = Vec::new();
 
-        // ш → ch: «kashalot» → «kachalot»
-        if word.contains("sh") {
-            candidates.push(word.replace("sh", "ch"));
+        // «кашалот» и «kashalot» — одно слово в разных алфавитах: кириллицу
+        // сначала транслитерируем, иначе замены sh/k до неё не доберутся
+        // («кашалот» → «kashalot» → «cachalot»). Сам транслит тоже вариант:
+        // запись может лежать под транслитерированным названием.
+        let translit = translit_ru(word);
+        if translit != word {
+            candidates.push(translit.clone());
         }
 
-        // К → c: латинские заимствования часто пишут через c.
-        if let Some(rest) = word.strip_prefix('k') {
-            if rest.chars().count() >= 3 {
-                candidates.push(format!("c{rest}"));
+        for base in [word, translit.as_str()] {
+            // ш → ch: «kashalot» → «kachalot»
+            if base.contains("sh") {
+                candidates.push(base.replace("sh", "ch"));
             }
-        }
 
-        // Обе замены разом: «kashalot» → «kachalot» → «cachalot».
-        if word.contains("sh") {
-            let stepped = word.replace("sh", "ch");
-            if let Some(rest) = stepped.strip_prefix('k') {
+            // К → c: латинские заимствования часто пишут через c.
+            if let Some(rest) = base.strip_prefix('k') {
                 if rest.chars().count() >= 3 {
                     candidates.push(format!("c{rest}"));
+                }
+            }
+
+            // Обе замены разом: «kashalot» → «kachalot» → «cachalot».
+            if base.contains("sh") {
+                let stepped = base.replace("sh", "ch");
+                if let Some(rest) = stepped.strip_prefix('k') {
+                    if rest.chars().count() >= 3 {
+                        candidates.push(format!("c{rest}"));
+                    }
                 }
             }
         }
@@ -2928,6 +2939,56 @@ mod tests {
             variants.iter().any(|v| v == "kachalot"),
             "нет варианта kachalot: {variants:?}"
         );
+    }
+
+    #[test]
+    fn builds_spelling_variants_for_cyrillic_title() {
+        // Реальный перезалив называется «кашалот-ondaandar» — кириллицей.
+        // Без транслитерации слова замены sh/k не срабатывают, и вариант
+        // «cachalot» не появляется вовсе: LRCLIB по кириллице пуст.
+        let variants = spelling_variants("кашалот-ondaandar");
+        assert!(
+            variants.iter().any(|v| v == "cachalot"),
+            "нет варианта cachalot для кириллицы: {variants:?}"
+        );
+        assert!(
+            variants.iter().any(|v| v == "kashalot"),
+            "нет транслита kashalot: {variants:?}"
+        );
+    }
+
+    #[test]
+    fn cyrillic_reupload_scores_above_threshold() {
+        // Сквозная проверка: кириллическое название + ник загрузившего в теге
+        // артиста. Запись «cachalot» ONDA ANDAR должна проходить порог 4.0
+        // за счёт слитного артиста в названии и совпадения длительности.
+        let entry = serde_json::json!({
+            "trackName": "cachalot",
+            "artistName": "ONDA ANDAR",
+            "duration": 120.685
+        });
+        let score = score_lrc_track(&entry, "кашалот-ondaandar", "マップトッシュ(ma5toch)", 120_046.0);
+        assert!(score >= 4.0, "кириллический перезалив не проходит порог: {score}");
+    }
+
+    #[tokio::test]
+    #[ignore = "ходит в сеть: запускать вручную, когда проверяем живой поиск"]
+    async fn live_finds_cyrillic_kashalot() {
+        // Реальный перезалив «кашалот-ondaandar» (кириллица) от nik загрузившего.
+        // Оригинал на LRCLIB — «cachalot» ONDA ANDAR. Без транслитерации слова
+        // в spelling_variants вариант «cachalot» не строился и поиск был пуст.
+        let result = get_lyrics("кашалот-ondaandar", "マップトッシュ(ma5toch)", "", 120_046.0).await;
+
+        assert!(result.found, "текст не найден: {:?}", result.error);
+        assert_eq!(
+            result.title.as_deref(),
+            Some("cachalot"),
+            "найден чужой трек: {:?} — {:?}",
+            result.title,
+            result.artist
+        );
+        assert_eq!(result.artist.as_deref(), Some("ONDA ANDAR"));
+        eprintln!("найдено: {:?} — {:?}", result.title, result.artist);
     }
 
     #[test]
