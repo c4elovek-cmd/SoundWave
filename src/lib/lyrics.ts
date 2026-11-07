@@ -568,6 +568,20 @@ export function buildTimedLyrics(
   return buildTimedLyricsDetailed(lyrics, duration, lrc, sourceDuration).lines;
 }
 
+/**
+ * Подавление правила «допевания» после ручного прыжка.
+ *
+ * Пользователь кликнул по строке — подсветка обязана встать ровно на неё,
+ * а не цепляться за предыдущую строку, у которой LRC-конец нахлёстывается
+ * на начало выбранной. Флаг живёт полторы секунды: за это время строка
+ * пропоётся и правило вернётся к обычной работе.
+ */
+let holdSuppressedUntil = 0;
+
+export function suppressKaraokeHold(): void {
+  holdSuppressedUntil = Date.now() + 1500;
+}
+
 /** Индекс строки, которая звучит в момент time. */
 export function findActiveLine(lines: LyricsLine[], time: number): number {
   let active = -1;
@@ -585,7 +599,7 @@ export function findActiveLine(lines: LyricsLine[], time: number): number {
   // продолжает догорать, и переход происходит по окончании пения.
   // Потолок удержания — 2 секунды сверх метки следующей строки: он
   // страхует от кривых таймингов, когда «конец» размазан на всю паузу.
-  if (active > 0) {
+  if (active > 0 && Date.now() >= holdSuppressedUntil) {
     const prev = lines[active - 1];
     const nextStart = lines[active].start ?? 0;
 

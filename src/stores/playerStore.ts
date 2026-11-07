@@ -68,6 +68,8 @@ interface PlayerState {
   next: () => void;
   prev: () => void;
   seek: (progress: number) => void;
+  /** Абсолютный прыжок по времени в секундах — без пересчёта через долю. */
+  seekTo: (seconds: number) => void;
   setVolume: (vol: number) => void;
   toggleMute: () => void;
   setRepeat: (mode: RepeatMode) => void;
@@ -551,6 +553,19 @@ export const usePlayerStore = create<PlayerState>((set, get) => ({
 
     audio.currentTime = Math.max(0, Math.min(total - 0.1, progress * total));
     set({ progress });
+  },
+
+  seekTo: (seconds: number) => {
+    const { audio, duration } = get();
+    if (!audio) return;
+    const total = duration / 1000;
+    if (total <= 0) return;
+
+    const target = Math.max(0, Math.min(total - 0.05, seconds));
+    logAction("seek_to", { seconds: Math.round(target * 10) / 10 });
+
+    audio.currentTime = target;
+    set({ progress: target / total });
   },
 
   setVolume: (vol: number) => {

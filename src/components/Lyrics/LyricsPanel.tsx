@@ -17,6 +17,7 @@ import {
   findActiveLine,
   lineProgress,
   LyricsLine,
+  suppressKaraokeHold,
   SyncQuality,
 } from "../../lib/lyrics";
 import { BUILTIN_FONTS, CUSTOM_FONT_PREFIX, fontFamilies, fontStack } from "../../lib/fonts";
@@ -139,15 +140,10 @@ export default function LyricsPanel() {
   const seekToLine = (line: LyricsLine) => {
     if (line.start === null) return;
 
-    const state = usePlayerStore.getState();
-    const total =
-      state.audio?.duration && Number.isFinite(state.audio.duration)
-        ? state.audio.duration
-        : state.duration / 1000;
-
-    if (total > 0) {
-      state.seek(Math.max(0, Math.min(1, line.start / total)));
-    }
+    // Абсолютный прыжок: подсветка обязана встать ровно на выбранную
+    // строку, без пересчёта позиции через долю длительности.
+    suppressKaraokeHold();
+    usePlayerStore.getState().seekTo(line.start);
   };
 
   const canRetry = !loading && Boolean(error) && Boolean(currentTrack);
