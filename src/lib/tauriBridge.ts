@@ -353,14 +353,21 @@ export function createTauriBridge(): Window["electronAPI"] {
       title: string,
       artist: string,
       start?: number,
-      end?: number
+      end?: number,
+      duration?: number
     ) =>
-      invoke<{ ok: boolean; path?: string; error?: string }>("soundpad_save", {
+      invoke<{
+        ok: boolean;
+        path?: string;
+        steamSoundpad?: boolean;
+        error?: string;
+      }>("soundpad_save", {
         input,
         title,
         artist,
         start: start ?? null,
         end: end ?? null,
+        duration: duration ?? null,
       }),
     /** Саундпад: удалить сохранённый файл. */
     soundpadDelete: (path: string) =>

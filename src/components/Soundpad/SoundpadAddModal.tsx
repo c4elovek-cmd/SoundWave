@@ -206,11 +206,13 @@ export default function SoundpadAddModal({ onClose }: Props) {
         name.trim(),
         artist,
         mode === "fragment" ? start : undefined,
-        mode === "fragment" ? finalEnd : undefined
+        mode === "fragment" ? finalEnd : undefined,
+        total
       )
       .catch((error: unknown) => ({
         ok: false,
         path: undefined,
+        steamSoundpad: false,
         error: error instanceof Error ? error.message : "Не удалось сохранить звук",
       }));
     setBusy(null);
@@ -222,6 +224,26 @@ export default function SoundpadAddModal({ onClose }: Props) {
         message: result?.error,
         timeout: 6000,
       });
+      return;
+    }
+
+    // Steam SoundPad установлен — звук ушёл и в его список (файл копия
+    // лежит рядом с его данными). Он держит список в памяти: новый звук
+    // появится после перезапуска SoundPad.
+    if (result.steamSoundpad) {
+      logAction("soundpad.saved_to_steam", { id: currentTrack.id, mode });
+      showToast({
+        kind: "success",
+        title: "Добавлено в Steam SoundPad",
+        message:
+          "Перезапусти SoundPad, чтобы звук появился в списке: всё сохраняет сразу (Ctrl+S)",
+        timeout: 7000,
+        action: {
+          label: "Папка SoundPad",
+          onClick: () => void window.electronAPI?.openPath?.("steam-soundpad"),
+        },
+      });
+      onClose();
       return;
     }
 

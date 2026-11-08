@@ -1307,6 +1307,11 @@ fn open_path(app: AppHandle, path: String) -> Result<bool, String> {
             .unwrap_or_else(|_| "shell:Downloads".to_string())
     } else if path == "soundpad" {
         soundpad_dir(&app)?.to_string_lossy().to_string()
+    } else if path == "steam-soundpad" {
+        match steam_soundpad_dir() {
+            Some(dir) => dir.to_string_lossy().to_string(),
+            None => return Err("Steam SoundPad не установлен".to_string()),
+        }
     } else {
         path
     };
@@ -1901,6 +1906,123 @@ fn soundpad_dir(app: &AppHandle) -> Result<std::path::PathBuf, String> {
     Ok(dir)
 }
 
+/// Папка Steam SoundPad (%APPDATA%\Leppsoft), если он установлен.
+///
+/// Проверяем по живому списку звуков `soundlist.spl`: левое дублирование
+/// папки без самого приложения не нужно — писать туда некуда.
+fn steam_soundpad_dir() -> Option<std::path::PathBuf> {
+    let dir = std::env::var("APPDATA")
+        .ok()
+        .map(|base| std::path::PathBuf::from(base).join("Leppsoft"))?;
+    if dir.join("soundlist.spl").exists() {
+        Some(dir)
+    } else {
+        None
+    }
+}
+
+/// Уникальный hash записи SoundPad: три числа, как у самого Steam SoundPad.
+fn soundpad_hash() -> String {
+    static COUNTER: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+
+    let stamp = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| d.as_millis() as u64)
+        .unwrap_or(0);
+    let tick = COUNTER.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+    let seed = stamp.wrapping_add((std::process::id() as u64) << 32) ^ tick.wrapping_add(0x9e3779b97f4a7c15);
+    format!(
+        "{}-{}-{}",
+        (seed >> 17) as u32,
+        (seed % 10_000_000) as u32,
+        ((seed * 31 + tick * 7919) % 10_000_000) as u32
+    )
+}
+
+/// Экранирование для XML-атрибутов.
+fn xml_escape(value: &str) -> String {
+    value
+        .replace('&', "&amp;")
+        .replace('<', "&lt;")
+        .replace('>', "&gt;")
+        .replace('"', "&quot;")
+}
+
+/// Сегодняшняя дата: ISO-строка «2026-11-07» — такой формат пишет SoundPad.
+fn today_date() -> String {
+    use std::time::{SystemTime, UNIX_EPOCH};
+
+    let days = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .map(|d| (d.as_secs() / 86_400) as i64)
+        .unwrap_or(0);
+
+    // civil_from_days (алгоритм Ховарда Хиннанта): дни с 1970-01-01 → дата.
+    let z = days + 719_468;
+    let era = if z >= 0 { z } else { z - 146_096 } / 146_097;
+    let doe = z - era * 146_097;
+    let yoe = (doe - doe / 1460 + doe / 36_524 - doe / 146_096) / 365;
+    let y = yoe + era * 400;
+    let doy = doe - (365 * yoe + yoe / 4 - yoe / 100);
+    let mp = (5 * doy + 2) / 153;
+    let d = doy - (153 * mp + 2) / 5 + 1;
+    let m = if mp < 10 { mp + 3 } else { mp - 9 };
+    let year = if m <= 2 { y + 1 } else { y };
+
+    format!("{year:04}-{m:02}-{d:02}")
+}
+
+/// Длительность для SoundPad: минуты и секунды — «4:05».
+fn soundpad_duration(seconds: f64) -> String {
+    let total = if seconds.is_finite() && seconds > 0.0 {
+        seconds.round() as u64
+    } else {
+        0
+    };
+    format!("{}:{:02}", total / 60, total % 60)
+}
+
+/// Дописывает запись в список звуков Steam SoundPad (`soundlist.spl`).
+///
+/// Атомарно — во временный файл и переименованием. Внимание: если SoundPad
+/// запущен, он хранит список в памяти и при выходе перезапишет файл своим
+/// содержимым, поэтому интерфейс подсказывает перезапустить его.
+fn steam_soundpad_add(
+    steam_dir: &std::path::Path,
+    file: &std::path::Path,
+    title: &str,
+    artist: &str,
+    duration_seconds: f64,
+) -> Result<(), String> {
+    let list_path = steam_dir.join("soundlist.spl");
+    let mut content = std::fs::read_to_string(&list_path)
+        .map_err(|e| format!("Не удалось прочитать список SoundPad: {e}"))?;
+
+    let position = content
+        .rfind("</Soundlist>")
+        .ok_or_else(|| "Список SoundPad поврежден — запись добавлена не будет".to_string())?;
+
+    let entry = format!(
+        "  <Sound hash=\"{hash}\" url=\"{url}\" artist=\"{artist}\" title=\"{title}\" duration=\"{duration}\" addedOn=\"{today}\"/>\n",
+        hash = soundpad_hash(),
+        url = xml_escape(&file.to_string_lossy()),
+        artist = xml_escape(artist),
+        title = xml_escape(title),
+        duration = soundpad_duration(duration_seconds),
+        today = today_date(),
+    );
+
+    content.insert_str(position, &entry);
+
+    let tmp = steam_dir.join("soundlist.spl.soundwave.tmp");
+    std::fs::write(&tmp, content)
+        .map_err(|e| format!("Не удалось записать список SoundPad: {e}"))?;
+    std::fs::rename(&tmp, &list_path)
+        .map_err(|e| format!("Не удалось обновить список SoundPad: {e}"))?;
+
+    Ok(())
+}
+
 /// Сохранить звук в саундпад: целый трек копируется, фрагмент вырезается ffmpeg.
 ///
 /// `start`/`end` — секунды в исходном файле. Без них файл копируется как
@@ -1914,6 +2036,7 @@ async fn soundpad_save(
     artist: String,
     start: Option<f64>,
     end: Option<f64>,
+    duration: Option<f64>,
 ) -> Result<Value, String> {
     let input_path = std::path::PathBuf::from(&input);
     if !input_path.is_file() {
@@ -1995,7 +2118,42 @@ async fn soundpad_save(
         }
     }
 
-    Ok(serde_json::json!({ "ok": true, "path": target.to_string_lossy() }))
+    // Steam SoundPad: если установлен, звук попадает и в его список.
+    // Файл копируем в его папку, чтобы запись жила независимо от наших
+    // загрузок, и дописываем его в soundlist.spl.
+    let mut steam_soundpad = false;
+    if let Some(steam_dir) = steam_soundpad_dir() {
+        let steam_files = steam_dir.join("SoundWave");
+        if let Err(e) = std::fs::create_dir_all(&steam_files) {
+            return Err(format!("Не удалось подготовить папку SoundPad: {e}"));
+        }
+        let steam_file = unique_path(
+            &steam_files,
+            &format!(
+                "{} - {}.mp3",
+                safe_file_name(&artist),
+                safe_file_name(&title)
+            ),
+        );
+
+        tokio::fs::copy(&target, &steam_file)
+            .await
+            .map_err(|e| format!("Не удалось скопировать звук для SoundPad: {e}"))?;
+
+        let seconds = match (start, end) {
+            (Some(s), Some(e)) => e - s,
+            _ => duration.unwrap_or(0.0),
+        };
+
+        steam_soundpad_add(&steam_dir, &steam_file, &title, &artist, seconds)?;
+        steam_soundpad = true;
+    }
+
+    Ok(serde_json::json!({
+        "ok": true,
+        "path": target.to_string_lossy(),
+        "steamSoundpad": steam_soundpad,
+    }))
 }
 
 /// Удалить файл из саундпада.

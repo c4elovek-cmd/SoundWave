@@ -109,8 +109,14 @@ declare global {
         title: string,
         artist: string,
         start?: number,
-        end?: number
-      ) => Promise<{ ok: boolean; path?: string; error?: string }>;
+        end?: number,
+        duration?: number
+      ) => Promise<{
+        ok: boolean;
+        path?: string;
+        steamSoundpad?: boolean;
+        error?: string;
+      }>;
       /** Саундпад: удалить сохранённый файл. */
       soundpadDelete: (path: string) => Promise<{ ok: boolean; error?: string }>;
       onDownloadProgress: (

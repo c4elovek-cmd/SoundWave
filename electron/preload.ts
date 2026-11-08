@@ -195,8 +195,9 @@ if (isExternalPage) {
       title: string,
       artist: string,
       start?: number,
-      end?: number
-    ) => ipcRenderer.invoke("soundpad-save", input, title, artist, start, end),
+      end?: number,
+      duration?: number
+    ) => ipcRenderer.invoke("soundpad-save", input, title, artist, start, end, duration),
     // Саундпад: удалить сохранённый файл
     soundpadDelete: (path: string) => ipcRenderer.invoke("soundpad-delete", path),
     onDownloadProgress: (

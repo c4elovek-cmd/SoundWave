@@ -2868,7 +2868,9 @@ function setupIPC() {  // Получить сохранённые настрой
           ? app.getPath("downloads")
           : target === "soundpad"
             ? soundpadDir()
-            : target;
+            : target === "steam-soundpad"
+              ? steamSoundpadDir() ?? target
+              : target;
       if (resolved.includes(":") && !resolved.startsWith("http")) {
         let isFile = false;
         try {
@@ -3200,6 +3202,72 @@ function setupIPC() {  // Получить сохранённые настрой
     return dir;
   }
 
+  /**
+   * Папка Steam SoundPad (%APPDATA%\Leppsoft), если он установлен.
+   * Проверяем по живому списку звуков `soundlist.spl`: папка без самого
+   * приложения не нужна — писать туда некуда.
+   */
+  function steamSoundpadDir(): string | null {
+    const dir = path.join(app.getPath("appData"), "Leppsoft");
+    return existsSync(path.join(dir, "soundlist.spl")) ? dir : null;
+  }
+
+  /** Экранирование для XML-атрибутов soundlist.spl. */
+  function xmlEscape(value: string): string {
+    return value
+      .replace(/&/g, "&amp;")
+      .replace(/</g, "&lt;")
+      .replace(/>/g, "&gt;")
+      .replace(/"/g, "&quot;");
+  }
+
+  /** Длительность для SoundPad: минуты и секунды — «4:05». */
+  function soundpadDuration(seconds: number): string {
+    const total = Number.isFinite(seconds) && seconds > 0 ? Math.round(seconds) : 0;
+    return `${Math.floor(total / 60)}:${String(total % 60).padStart(2, "0")}`;
+  }
+
+  /**
+   * Дописывает запись в список звуков Steam SoundPad (`soundlist.spl`).
+   *
+   * Атомарно — во временный файл и переименованием. Внимание: если SoundPad
+   * запущен, он хранит список в памяти и при выходе перезапишет файл своим
+   * содержимым, поэтому интерфейс подсказывает перезапустить его.
+   */
+  async function steamSoundpadAdd(
+    steamDir: string,
+    filePath: string,
+    title: string,
+    artist: string,
+    durationSeconds: number
+  ): Promise<void> {
+    const listPath = path.join(steamDir, "soundlist.spl");
+    let content = await fsPromises.readFile(listPath, "utf8");
+
+    const position = content.lastIndexOf("</Soundlist>");
+    if (position < 0) {
+      throw new Error("Список SoundPad поврежден — запись добавлена не будет");
+    }
+
+    const hash = [
+      randomBytes(4).readUInt32BE(0),
+      randomBytes(4).readUInt32BE(0) % 10_000_000,
+      randomBytes(4).readUInt32BE(0) % 10_000_000,
+    ].join("-");
+    const today = new Date().toISOString().slice(0, 10);
+
+    const entry =
+      `  <Sound hash="${hash}" url="${xmlEscape(filePath)}" ` +
+      `artist="${xmlEscape(artist)}" title="${xmlEscape(title)}" ` +
+      `duration="${soundpadDuration(durationSeconds)}" addedOn="${today}"/>\n`;
+
+    content = content.slice(0, position) + entry + content.slice(position);
+
+    const tmp = path.join(steamDir, "soundlist.spl.soundwave.tmp");
+    await fsPromises.writeFile(tmp, content, "utf8");
+    await fsPromises.rename(tmp, listPath);
+  }
+
   /** Вырезать фрагмент [start, end] из файла в mp3. Бросает ошибку при неудаче. */
   function cutFragment(
     input: string,
@@ -3270,7 +3338,8 @@ function setupIPC() {  // Получить сохранённые настрой
       title: string,
       artist: string,
       start?: number,
-      end?: number
+      end?: number,
+      duration?: number
     ) => {
       try {
         if (!input || !existsSync(input)) {
@@ -3296,7 +3365,34 @@ function setupIPC() {  // Получить сохранённые настрой
           await fsPromises.copyFile(input, target);
         }
 
-        return { ok: true, path: target };
+        // Steam SoundPad: если установлен, звук попадает и в его список.
+        // Файл копируем в его папку, чтобы запись жила независимо от
+        // наших загрузок, и дописываем его в soundlist.spl.
+        let steamSoundpad = false;
+        const steamDir = steamSoundpadDir();
+        if (steamDir) {
+          const steamFiles = path.join(steamDir, "SoundWave");
+          await fsPromises.mkdir(steamFiles, { recursive: true });
+          const steamFile = uniqueFilePath(
+            steamFiles,
+            `${safeFileName(String(artist ?? ""))} - ${safeFileName(String(title ?? ""))}.mp3`
+          );
+          await fsPromises.copyFile(target, steamFile);
+          const seconds =
+            typeof start === "number" && typeof end === "number"
+              ? end - start
+              : (duration ?? 0);
+          await steamSoundpadAdd(
+            steamDir,
+            steamFile,
+            String(title ?? ""),
+            String(artist ?? ""),
+            seconds
+          );
+          steamSoundpad = true;
+        }
+
+        return { ok: true, path: target, steamSoundpad };
       } catch (e) {
         const message = e instanceof Error ? e.message : "Не удалось сохранить звук";
         log.warn("Саундпад:", message);
