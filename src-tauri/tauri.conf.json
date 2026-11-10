@@ -48,6 +48,8 @@
   "bundle": {
     "active": true,
     "targets": ["nsis"],
+    "publisher": "c4elovek",
+    "copyright": "© 2026 c4elovek",
     "icon": [
       "icons/32x32.png",
       "icons/128x128.png",
