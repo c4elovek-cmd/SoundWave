@@ -21,6 +21,7 @@ const GENIUS_CACHE_TTL: Duration = Duration::from_secs(6 * 60 * 60);
 const GENIUS_CACHE_LIMIT: usize = 200;
 
 const LRCLIB_API: &str = "https://lrclib.net/api/search";
+const LRCLIB_API_BASE: &str = "https://lrclib.net/api";
 const LRCLIB_UA: &str = "SoundWave/0.1 (https://github.com/c4elovek-cmd/SoundWave)";
 const LRCLIB_TIMEOUT: Duration = Duration::from_secs(10);
 const KARALYR_API: &str = "https://karalyr.com/api/get";
@@ -93,6 +94,120 @@ static HTTP: Lazy<reqwest::Client> = Lazy::new(|| {
         .build()
         .expect("не удалось собрать HTTP-клиент")
 });
+
+/// Паузы по источникам после ответа 429: имя источника → момент, до которого
+/// его не трогаем.
+static REQUEST_COOLDOWN: Lazy<Mutex<HashMap<String, Instant>>> =
+    Lazy::new(|| Mutex::new(HashMap::new()));
+
+/// Сколько секунд источник просит не трогать после ответа 429.
+///
+/// LRCLIB и Genius под нагрузкой отвечают «слишком много запросов», и без
+/// паузы следующий поиск текста тратит запросы впустую снова и снова.
+/// `Retry-After` бывает и числом секунд, и датой (RFC 7231) — понимаем оба.
+fn retry_after_seconds(headers: &reqwest::header::HeaderMap) -> u64 {
+    let Some(value) = headers
+        .get(reqwest::header::RETRY_AFTER)
+        .and_then(|v| v.to_str().ok())
+    else {
+        return 60;
+    };
+    let value = value.trim();
+
+    if let Ok(seconds) = value.parse::<u64>() {
+        return seconds.clamp(1, 3600);
+    }
+
+    // Дата вычитается из системного времени: лишняя зависимость ради
+    // разбора одного заголовка не нужна.
+    if let Some(target) = parse_http_date(value) {
+        let now = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map(|d| d.as_secs())
+            .unwrap_or(0);
+        return target.saturating_sub(now).clamp(1, 3600);
+    }
+
+    60
+}
+
+/// Дата HTTP в секундах эпохи: `Sun, 06 Nov 1994 08:49:37 GMT` и два
+/// устаревших варианта из RFC 7231.
+fn parse_http_date(value: &str) -> Option<u64> {
+    // Дата HTTP в секундах эпохи: `Sun, 06 Nov 1994 08:49:37 GMT`, а также
+    // устаревшие `Sunday, 06-Nov-94 08:49:37 GMT` и `Sun Nov  6 08:49:37 1994`.
+    let date = match value.split_once(", ") {
+        Some((_, rest)) => rest.to_string(),
+        None => value.trim().to_string(),
+    };
+    let date = date.replace('-', " ");
+    let parts: Vec<&str> = date.split_whitespace().collect();
+
+    // Отсекаем форму asctime, где месяц стоит первым — она практически не
+    // встречается, и тратить на неё код незачем.
+    if parts.len() < 5 {
+        return None;
+    }
+
+    let day: i64 = parts[0].parse().ok()?;
+    let month = month_number(parts[1])?;
+    let year: i64 = if parts[2].len() == 2 {
+        1900 + parts[2].parse::<i64>().ok()?
+    } else {
+        parts[2].parse().ok()?
+    };
+    let time: Vec<i64> = parts[3]
+        .split(':')
+        .map(|p| p.parse::<i64>().ok())
+        .collect::<Option<Vec<_>>>()?;
+    if time.len() != 3 {
+        return None;
+    }
+
+    // Дни от эпохи по алгоритму, обратному к civil_from_days.
+    let (y, m) = (year - (month <= 2) as i64, month);
+    let era = if y >= 0 { y } else { y - 399 } / 400;
+    let yoe = y - era * 400;
+    let doy = (153 * (m + if m > 2 { -3 } else { 9 }) + 2) / 5 + day - 1;
+    let doe = yoe * 365 + yoe / 4 - yoe / 100 + doy;
+    let days = era * 146097 + doe - 719468;
+
+    let seconds = days * 86400 + time[0] * 3600 + time[1] * 60 + time[2];
+    if seconds < 0 { None } else { Some(seconds as u64) }
+}
+
+/// Номер месяца по трёхбуквенному английскому названию.
+fn month_number(name: &str) -> Option<i64> {
+    const MONTHS: [&str; 12] = [
+        "Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec",
+    ];
+    MONTHS
+        .iter()
+        .position(|m| m.eq_ignore_ascii_case(name))
+        .map(|i| i as i64 + 1)
+}
+
+/// Поставить источнику паузу после ответа 429.
+fn cool_down_source(source: &str, headers: &reqwest::header::HeaderMap) {
+    let seconds = retry_after_seconds(headers);
+    let until = std::time::Instant::now() + Duration::from_secs(seconds);
+    if let Ok(mut guard) = REQUEST_COOLDOWN.lock() {
+        guard.insert(source.to_string(), until);
+    }
+}
+
+/// Источник сейчас отдыхает — запрашивать его бессмысленно.
+fn source_is_cooling(source: &str) -> bool {
+    let now = std::time::Instant::now();
+    match REQUEST_COOLDOWN.lock() {
+        Ok(mut guard) => {
+            // Заодно вычищаем истёкшие паузы, чтобы карта не росла.
+            guard.retain(|_, until| *until > now);
+            guard.contains_key(source)
+        }
+        Err(_) => false,
+    }
+}
 
 static RE_PAREN: Lazy<Regex> = Lazy::new(|| Regex::new(r"\([^()]*\)|\[[^\]]*\]").unwrap());
 static RE_NON_WORD: Lazy<Regex> = Lazy::new(|| Regex::new(r"[^\p{L}\p{N}]+").unwrap());
@@ -1086,6 +1201,13 @@ async fn fetch_genius(url: &str, as_json: bool) -> Result<String, String> {
         .await
         .map_err(|e| format!("Genius недоступен: {e}"))?;
 
+    if response.status() == reqwest::StatusCode::TOO_MANY_REQUESTS {
+        // Genius начинает отвечать 429 после десятка запросов подряд; без
+        // паузы остальные варианты названия жгут лимит впустую.
+        cool_down_source("genius", response.headers());
+        return Err("Genius ограничил частоту запросов".to_string());
+    }
+
     if !response.status().is_success() {
         return Err(format!("Genius ответил {}", response.status()));
     }
@@ -1102,6 +1224,11 @@ async fn find_genius_lyrics(
     artist: &str,
     description: &str,
 ) -> PlainLyrics {
+    // Genius на паузе после 429 — сразу отдаём ход LRCLIB.
+    if source_is_cooling("genius") {
+        return PlainLyrics::default();
+    }
+
     let mut titles = title_variants(title);
     for candidate in title_candidates_from_description(description) {
         if !titles.contains(&candidate) {
@@ -1431,6 +1558,28 @@ async fn get_lrclib_plain_lyrics(title: &str, artist: &str, duration_ms: f64) ->
         return serde_json::from_value(cached).unwrap_or_default();
     }
 
+    let mut best: Option<(f32, Value)> = None;
+
+    // Сначала прямой адрес записи: артист и название известны, длительность
+    // известна — точнее этого запроса не бывает. Оценка всё равно применяется.
+    if !artist.is_empty() && duration_ms > 0.0 {
+        let exact_title = clean_title(title);
+        if let Some(entry) = lrclib_exact_entry(title, artist, duration_ms, "").await {
+            if entry
+                .get("plainLyrics")
+                .and_then(|v| v.as_str())
+                .map(|plain| plain.trim().chars().count() >= 40)
+                .unwrap_or(false)
+                && version_markers_compatible(title, entry.get("trackName").and_then(|v| v.as_str()).unwrap_or(""))
+            {
+                let score = score_lrc_track(&entry, &exact_title, artist, duration_ms);
+                if score >= 4.0 {
+                    best = Some((score, entry));
+                }
+            }
+        }
+    }
+
     let mut titles = vec![title.to_string()];
     for variant in title_variants(title) {
         if !titles.contains(&variant) {
@@ -1455,6 +1604,10 @@ async fn get_lrclib_plain_lyrics(title: &str, artist: &str, duration_ms: f64) ->
 
     'outer: for t in &titles {
         for a in &artists {
+            // Источник на паузе после 429 — не тратим на него запросы.
+            if source_is_cooling("lrclib") {
+                break 'outer;
+            }
             let url = if a.is_empty() {
                 format!("{LRCLIB_API}?track_name={}", encode_uri_component(t))
             } else {
@@ -1475,6 +1628,11 @@ async fn get_lrclib_plain_lyrics(title: &str, artist: &str, duration_ms: f64) ->
             else {
                 continue;
             };
+
+            if response.status() == reqwest::StatusCode::TOO_MANY_REQUESTS {
+                cool_down_source("lrclib", response.headers());
+                break 'outer;
+            }
 
             if !response.status().is_success() {
                 continue;
@@ -1512,6 +1670,8 @@ async fn get_lrclib_plain_lyrics(title: &str, artist: &str, duration_ms: f64) ->
                 }
             }
 
+            // Точная запись из `/api/get` уже есть — общий поиск по вариантам
+            // названия ничего лучше не даст.
             if best.as_ref().map(|(s, _)| *s >= 18.0).unwrap_or(false) {
                 break 'outer;
             }
@@ -1528,6 +1688,9 @@ async fn get_lrclib_plain_lyrics(title: &str, artist: &str, duration_ms: f64) ->
             let spell_artists = [artist.to_string(), String::new()];
             'spell: for variant in &variants {
                 for a in &spell_artists {
+                    if source_is_cooling("lrclib") {
+                        break 'spell;
+                    }
                     let url = if a.is_empty() {
                         format!("{LRCLIB_API}?track_name={}", encode_uri_component(variant))
                     } else {
@@ -1548,6 +1711,10 @@ async fn get_lrclib_plain_lyrics(title: &str, artist: &str, duration_ms: f64) ->
                     else {
                         continue;
                     };
+                    if response.status() == reqwest::StatusCode::TOO_MANY_REQUESTS {
+                        cool_down_source("lrclib", response.headers());
+                        break 'spell;
+                    }
                     if !response.status().is_success() {
                         continue;
                     }
@@ -1588,7 +1755,7 @@ async fn get_lrclib_plain_lyrics(title: &str, artist: &str, duration_ms: f64) ->
     }
 
     // Fallback: Karalyr — LRCLIB-совместимый, отдаёт plain-текст тоже.
-    if best.is_none() {
+    if best.is_none() && !source_is_cooling("karalyr") {
         let url = format!(
             "{}?track_name={}&artist_name={}&duration={}",
             KARALYR_API,
@@ -1604,6 +1771,9 @@ async fn get_lrclib_plain_lyrics(title: &str, artist: &str, duration_ms: f64) ->
             .send()
             .await
         {
+            if response.status() == reqwest::StatusCode::TOO_MANY_REQUESTS {
+                cool_down_source("karalyr", response.headers());
+            }
             if response.status().is_success() {
                 if let Ok(entry) = response.json::<Value>().await {
                     if let Some(plain) = entry.get("plainLyrics").and_then(|v| v.as_str()) {
@@ -1629,7 +1799,7 @@ async fn get_lrclib_plain_lyrics(title: &str, artist: &str, duration_ms: f64) ->
     // обычный текст, когда на LRCLIB записи нет вовсе. Ищем по паре «артист +
     // название»: Lrcmux находит перезаливы, где в теге стоит ник загрузившего
     // («lightprey»), а на странице указан настоящий исполнитель.
-    if best.is_none() {
+    if best.is_none() && !source_is_cooling("lrcmux") {
         let url = format!(
             "https://api.lrcmux.dev/get?artist={}&title={}&format=lrc",
             encode_uri_component(artist),
@@ -1642,6 +1812,9 @@ async fn get_lrclib_plain_lyrics(title: &str, artist: &str, duration_ms: f64) ->
             .send()
             .await
         {
+            if response.status() == reqwest::StatusCode::TOO_MANY_REQUESTS {
+                cool_down_source("lrcmux", response.headers());
+            }
             if response.status().is_success() {
                 if let Ok(body) = response.text().await {
                     let plain = strip_lrc_timestamps(&body);
@@ -1692,7 +1865,48 @@ async fn get_lrclib_plain_lyrics(title: &str, artist: &str, duration_ms: f64) ->
     result
 }
 
-/// Возвращает набор «ключевых слов версии» из названия: remix, mix, edit,
+/// Точный запрос LRCLIB по тройке «артист + название + длительность».
+///
+/// Поиск `/api/search` отдаёт сотни похожих песен, и строгие фильтры иногда
+/// режут верную запись заодно с чужими. `/api/get` адресует ровно одну
+/// запись: если она существует, это почти наверняка та же песня. Но ответ
+/// всё равно прогоняется через прежнюю оценку — мало ли что там лежит.
+async fn lrclib_exact_entry(
+    title: &str,
+    artist: &str,
+    duration_ms: f64,
+    album: &str,
+) -> Option<Value> {
+    if source_is_cooling("lrclib") {
+        return None;
+    }
+
+    let request = HTTP
+        .get(format!("{LRCLIB_API_BASE}/get"))
+        .query(&[
+            ("artist_name", artist),
+            ("track_name", clean_title(title).as_str()),
+            ("album_name", album),
+            ("duration", &(duration_ms / 1000.0).round().to_string()),
+        ])
+        .header("User-Agent", LRCLIB_UA)
+        .header("Accept", "application/json")
+        .timeout(LRCLIB_TIMEOUT)
+        .send()
+        .await
+        .ok()?;
+
+    if request.status() == reqwest::StatusCode::TOO_MANY_REQUESTS {
+        cool_down_source("lrclib", request.headers());
+        return None;
+    }
+
+    if !request.status().is_success() {
+        return None;
+    }
+
+    request.json::<Value>().await.ok()
+}
 /// version, live, bootleg, acoustic, instrumental, radio, extended, slowed,
 /// sped, reverb, nightcore, bass boosted, cover, acapella и т.п.
 /// Используется, чтобы не подхватить тайминги оригинала для ремикса:
@@ -2027,6 +2241,32 @@ pub async fn get_synced_lyrics(title: &str, artist: &str, duration_ms: f64) -> S
         return serde_json::from_value(cached).unwrap_or_default();
     }
 
+    let mut best: Option<(f32, Value)> = None;
+
+    // Точная запись по «артист + название + длительность»: для караоке это
+    // самый надёжный путь, ведь тайминги должны совпасть со звуком.
+    if !artist.is_empty() && duration_ms > 0.0 {
+        let exact_title = clean_title(title);
+        if let Some(entry) = lrclib_exact_entry(title, artist, duration_ms, "").await {
+            let has_sync = entry
+                .get("syncedLyrics")
+                .and_then(|v| v.as_str())
+                .map(|body| has_lrc_timestamps(body))
+                .unwrap_or(false);
+            if has_sync
+                && version_markers_compatible(
+                    title,
+                    entry.get("trackName").and_then(|v| v.as_str()).unwrap_or(""),
+                )
+            {
+                let score = score_lrc_track(&entry, &exact_title, artist, duration_ms);
+                if score >= 6.0 {
+                    best = Some((score, entry));
+                }
+            }
+        }
+    }
+
     let mut titles = vec![title.to_string()];
     for variant in title_variants(title) {
         if !titles.contains(&variant) {
@@ -2047,10 +2287,12 @@ pub async fn get_synced_lyrics(title: &str, artist: &str, duration_ms: f64) -> S
     artists.push(String::new());
     artists.truncate(3);
 
-    let mut best: Option<(f32, Value)> = None;
-
     'outer: for t in &titles {
         for a in &artists {
+            // Источник на паузе после 429 — не тратим на него запросы.
+            if source_is_cooling("lrclib") {
+                break 'outer;
+            }
             let url = if a.is_empty() {
                 format!("{LRCLIB_API}?track_name={}", encode_uri_component(t))
             } else {
@@ -2071,6 +2313,11 @@ pub async fn get_synced_lyrics(title: &str, artist: &str, duration_ms: f64) -> S
             else {
                 continue;
             };
+
+            if response.status() == reqwest::StatusCode::TOO_MANY_REQUESTS {
+                cool_down_source("lrclib", response.headers());
+                break 'outer;
+            }
 
             if !response.status().is_success() {
                 continue;
@@ -2119,6 +2366,8 @@ pub async fn get_synced_lyrics(title: &str, artist: &str, duration_ms: f64) -> S
                 }
             }
 
+            // Точная запись из `/api/get` уже есть — общий поиск по вариантам
+            // названия ничего лучше не даст.
             if best.as_ref().map(|(s, _)| *s >= 18.0).unwrap_or(false) {
                 break 'outer;
             }
@@ -2134,6 +2383,9 @@ pub async fn get_synced_lyrics(title: &str, artist: &str, duration_ms: f64) -> S
             let spell_artists = [artist.to_string(), String::new()];
             'spell: for variant in &variants {
                 for a in &spell_artists {
+                    if source_is_cooling("lrclib") {
+                        break 'spell;
+                    }
                     let url = if a.is_empty() {
                         format!("{LRCLIB_API}?track_name={}", encode_uri_component(variant))
                     } else {
@@ -2154,6 +2406,10 @@ pub async fn get_synced_lyrics(title: &str, artist: &str, duration_ms: f64) -> S
                     else {
                         continue;
                     };
+                    if response.status() == reqwest::StatusCode::TOO_MANY_REQUESTS {
+                        cool_down_source("lrclib", response.headers());
+                        break 'spell;
+                    }
                     if !response.status().is_success() {
                         continue;
                     }
@@ -2203,7 +2459,7 @@ pub async fn get_synced_lyrics(title: &str, artist: &str, duration_ms: f64) -> S
     }
 
     // Fallback: Karalyr — LRCLIB-совместимый сервис с word-synced караоке.
-    if best.is_none() {
+    if best.is_none() && !source_is_cooling("karalyr") {
         let url = format!(
             "{}?track_name={}&artist_name={}&duration={}",
             KARALYR_API,
@@ -2219,6 +2475,9 @@ pub async fn get_synced_lyrics(title: &str, artist: &str, duration_ms: f64) -> S
             .send()
             .await
         {
+            if response.status() == reqwest::StatusCode::TOO_MANY_REQUESTS {
+                cool_down_source("karalyr", response.headers());
+            }
             if response.status().is_success() {
                 if let Ok(entry) = response.json::<Value>().await {
                     if let Some(synced) = entry.get("syncedLyrics").and_then(|v| v.as_str()) {
@@ -2241,7 +2500,7 @@ pub async fn get_synced_lyrics(title: &str, artist: &str, duration_ms: f64) -> S
     }
 
     // Fallback: Lrcmux — агрегатор с word-level (Enhanced LRC) караоке.
-    if best.is_none() {
+    if best.is_none() && !source_is_cooling("lrcmux") {
         let url = format!(
             "https://api.lrcmux.dev/get?artist={}&title={}&format=lrc&level=word",
             encode_uri_component(artist),
@@ -2254,6 +2513,9 @@ pub async fn get_synced_lyrics(title: &str, artist: &str, duration_ms: f64) -> S
             .send()
             .await
         {
+            if response.status() == reqwest::StatusCode::TOO_MANY_REQUESTS {
+                cool_down_source("lrcmux", response.headers());
+            }
             if response.status().is_success() {
                 if let Ok(body) = response.text().await {
                     if body.trim().chars().count() > 20 && has_lrc_timestamps(&body) {
@@ -2321,6 +2583,22 @@ mod tests {
         // Скобочные приписки вырезаются: "(Original Song)" не мешает поиску.
         assert_eq!(normalize_text("I WANT (Original Song)"), "i want");
         assert_eq!(normalize_text("Don't Stop Me Now!"), "don t stop me now");
+    }
+
+    #[test]
+    fn parses_http_date_from_retry_after() {
+        // 06 Nov 1994 08:49:37 GMT = 784111777 секунд эпохи.
+        assert_eq!(
+            parse_http_date("Sun, 06 Nov 1994 08:49:37 GMT"),
+            Some(784_111_777)
+        );
+        // Устаревший формат RFC 850 с дефисами и двузначным годом.
+        assert_eq!(
+            parse_http_date("Sunday, 06-Nov-94 08:49:37 GMT"),
+            Some(784_111_777)
+        );
+        // Мусор в заголовке не должен ломать поиск текста.
+        assert_eq!(parse_http_date("soon"), None);
     }
 
     #[test]

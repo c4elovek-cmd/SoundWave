@@ -24,6 +24,11 @@ import { BUILTIN_FONTS, CUSTOM_FONT_PREFIX, fontFamilies, fontStack } from "../.
 import { KaraokeLine, paintKaraokeWords } from "./KaraokeLine";
 import "./Lyrics.css";
 
+/** Где держится активная строка: доля высоты контейнера (см. эффект прокрутки). */
+const FOCAL_RATIO = 0.45;
+/** Сколько миллисекунд после ручной прокрутки автопрокрутка молчит. */
+const MANUAL_PAUSE_MS = 4000;
+
 export default function LyricsPanel() {
   const currentTrack = usePlayerStore((s) => s.currentTrack);
   const duration = usePlayerStore((s) => s.duration);
@@ -42,6 +47,8 @@ export default function LyricsPanel() {
 
   const [activeLine, setActiveLine] = useState(-1);
   const bodyRef = useRef<HTMLDivElement>(null);
+  /** Момент последней ручной прокрутки текста — пауза для автопрокрутки. */
+  const manualScrollAt = useRef(0);
 
   const fontStackValue = fontStack(font, customFonts);
   const durationSec = duration > 0 ? duration / 1000 : 0;
@@ -115,8 +122,15 @@ export default function LyricsPanel() {
   }, [karaokeActive, timedLines, karaokeOffsetMs, karaokeMode]);
 
   // Автопрокрутка к активной строке.
+  //
+  // По мотивам NeDotify: активная строка держится на 45% высоты контейнера —
+  // это оптически по центру, но чуть выше середины, и следующая строка
+  // остаётся в кадре. Ручная прокрутка (колесо, перетаскивание) ставит
+  // автопрокрутку на паузу на 4 секунды: иначе текст «уезжает» из-под
+  // пальца, пока песня звучит.
   useEffect(() => {
     if (!karaokeActive || activeLine < 0) return;
+    if (Date.now() - manualScrollAt.current < MANUAL_PAUSE_MS) return;
 
     const body = bodyRef.current;
     const element = body?.querySelector<HTMLElement>(`[data-line="${activeLine}"]`);
@@ -127,7 +141,7 @@ export default function LyricsPanel() {
     const target =
       body.scrollTop +
       (elementRect.top - bodyRect.top) -
-      body.clientHeight / 2 +
+      body.clientHeight * FOCAL_RATIO +
       elementRect.height / 2;
 
     body.scrollTo({ top: Math.max(0, target), behavior: "smooth" });
@@ -285,6 +299,17 @@ export default function LyricsPanel() {
         ref={bodyRef}
         className={`lyrics-body ${karaokeActive ? "karaoke" : ""}`}
         style={{ fontFamily: fontStackValue }}
+        onWheel={() => {
+          manualScrollAt.current = Date.now();
+        }}
+        onPointerDown={(e) => {
+          // Перетаскивание строки тоже считается ручной прокруткой, а клик
+          // по строке — нет: он и так перескакивает по времени.
+          if (e.target === e.currentTarget) manualScrollAt.current = Date.now();
+        }}
+        onTouchMove={() => {
+          manualScrollAt.current = Date.now();
+        }}
       >
         {!currentTrack && (
           <div className="lyrics-status">

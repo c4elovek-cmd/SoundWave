@@ -42,3 +42,4 @@ desktop.ini
 !docs/**/*.png
 !resources/*.png
 !src-tauri/icons/**/*.png
+*.tsbuildinfo

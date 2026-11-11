@@ -1257,6 +1257,13 @@ async function fetchGenius(url: string, asJson: boolean): Promise<any> {
     signal: AbortSignal.timeout(GENIUS_TIMEOUT),
   });
 
+  if (res.status === 429) {
+    // Genius отвечает 429 после десятка запросов подряд; без паузы
+    // остальные варианты названия жгут лимит впустую.
+    coolDownSource("genius", res.headers);
+    throw new Error("Genius ограничил частоту запросов");
+  }
+
   if (!res.ok) throw new Error(`Genius ответил ${res.status}`);
   return asJson ? res.json() : res.text();
 }
@@ -1273,6 +1280,9 @@ async function findGeniusLyrics(
   artist: string,
   description?: string
 ): Promise<GeniusLyricsResult> {
+  // Genius на паузе после 429 — сразу отдаём ход LRCLIB.
+  if (sourceIsCooling("genius")) return { found: false };
+
   const titles = [...titleVariants(title), ...titleCandidatesFromDescription(description)];
   const artists = artistVariants(artist);
 
@@ -1444,11 +1454,89 @@ async function getGeniusLyrics(
  * раскладывает строки по длительности трека сама.
  */
 const LRCLIB_API = "https://lrclib.net/api/search";
+const LRCLIB_API_BASE = "https://lrclib.net/api";
 const LRCLIB_UA = "SoundWave/0.1 (https://github.com/c4elovek-cmd/SoundWave)";
 const LRCLIB_TIMEOUT = 10_000;
 const KARALYR_API = "https://karalyr.com/api/get";
 const KARALYR_TIMEOUT = 10_000;
 const LRCMUX_API = "https://api.lrcmux.dev/get";
+
+/**
+ * Источники на паузе после ответа 429: имя → момент (мс), до которого его
+ * не трогаем.
+ *
+ * LRCLIB и Genius под нагрузкой отвечают «слишком много запросов», и без
+ * паузы следующий поиск текста жжёт лимит впустую снова и снова.
+ */
+const lyricsCooldown = new Map<string, number>();
+
+/** Сколько миллисекунд источник просит не трогать (значение `Retry-After`). */
+function retryAfterMs(headers: Headers): number {
+  const raw = headers.get("retry-after")?.trim();
+  if (!raw) return 60_000;
+  const seconds = Number(raw);
+  if (Number.isFinite(seconds)) return Math.min(3_600_000, Math.max(1_000, seconds * 1000));
+  const date = Date.parse(raw);
+  if (Number.isFinite(date)) {
+    return Math.min(3_600_000, Math.max(1_000, date - Date.now()));
+  }
+  return 60_000;
+}
+
+/** Поставить источнику паузу после ответа 429. */
+function coolDownSource(source: string, headers: Headers): void {
+  lyricsCooldown.set(source, Date.now() + retryAfterMs(headers));
+}
+
+/** Источник сейчас отдыхает — запрашивать его бессмысленно. */
+function sourceIsCooling(source: string): boolean {
+  const until = lyricsCooldown.get(source);
+  if (until === undefined) return false;
+  if (until <= Date.now()) {
+    lyricsCooldown.delete(source);
+    return false;
+  }
+  return true;
+}
+
+/**
+ * Точная запись LRCLIB по тройке «артист + название + длительность».
+ *
+ * Поиск `/api/search` отдаёт сотни похожих песен, и строгие фильтры иногда
+ * режут верную запись заодно с чужими. `/api/get` адресует ровно одну
+ * запись: если она существует, это почти наверняка та же песня. Ответ всё
+ * равно прогоняется через прежнюю оценку — мало ли что там лежит.
+ */
+async function lrclibExactEntry(
+  title: string,
+  artist: string,
+  durationMs: number
+): Promise<any | null> {
+  if (!artist || durationMs <= 0 || sourceIsCooling("lrclib")) return null;
+
+  const url =
+    `${LRCLIB_API_BASE}/get?artist_name=${encodeURIComponent(artist)}` +
+    `&track_name=${encodeURIComponent(cleanTitle(title))}` +
+    `&duration=${Math.round(durationMs / 1000)}`;
+
+  let res: Response;
+  try {
+    res = await fetch(url, {
+      headers: { "User-Agent": LRCLIB_UA, Accept: "application/json" },
+      signal: AbortSignal.timeout(LRCLIB_TIMEOUT),
+    });
+  } catch {
+    return null;
+  }
+
+  if (res.status === 429) {
+    coolDownSource("lrclib", res.headers);
+    return null;
+  }
+  if (!res.ok) return null;
+
+  return res.json().catch(() => null);
+}
 
 /**
  * Есть ли в теле LRC хотя бы одна метка времени строки.
@@ -1697,8 +1785,26 @@ async function getLrclibPlainLyrics(
 
     let best: { entry: any; score: number } | null = null;
 
+    // Сначала прямой адрес записи: артист и название известны, длительность
+    // известна — точнее этого запроса не бывает. Оценка всё равно применяется.
+    const exact = await lrclibExactEntry(title, artist, durationMs);
+    if (exact) {
+      const plain = exact.plainLyrics;
+      if (
+        typeof plain === "string" &&
+        plain.trim().length >= 40 &&
+        versionMarkersCompatible(title, String(exact.trackName ?? ""))
+      ) {
+        const score = scoreLrcTrack(exact, cleanTitle(title), artist, durationMs);
+        if (score >= 4) best = { entry: exact, score };
+      }
+    }
+
     for (const t of titles) {
       for (const a of artists) {
+        // Источник на паузе после 429 — не тратим на него запросы.
+        if (sourceIsCooling("lrclib")) break;
+
         const url = a
           ? `${LRCLIB_API}?track_name=${encodeURIComponent(t)}&artist_name=${encodeURIComponent(a)}`
           : `${LRCLIB_API}?track_name=${encodeURIComponent(t)}`;
@@ -1708,6 +1814,10 @@ async function getLrclibPlainLyrics(
           signal: AbortSignal.timeout(LRCLIB_TIMEOUT),
         });
 
+        if (res.status === 429) {
+          coolDownSource("lrclib", res.headers);
+          break;
+        }
         if (!res.ok) continue;
 
         const list = await res.json();
@@ -1742,6 +1852,8 @@ async function getLrclibPlainLyrics(
       const spellArtists = [artist, ""];
       spellLoop: for (const variant of variants) {
         for (const a of spellArtists) {
+          if (sourceIsCooling("lrclib")) break spellLoop;
+
           const url = a
             ? `${LRCLIB_API}?track_name=${encodeURIComponent(variant)}&artist_name=${encodeURIComponent(a)}`
             : `${LRCLIB_API}?track_name=${encodeURIComponent(variant)}`;
@@ -1754,6 +1866,10 @@ async function getLrclibPlainLyrics(
             });
           } catch {
             continue;
+          }
+          if (res.status === 429) {
+            coolDownSource("lrclib", res.headers);
+            break spellLoop;
           }
           if (!res.ok) continue;
 
@@ -1780,7 +1896,7 @@ async function getLrclibPlainLyrics(
     }
 
     // Fallback: Karalyr — LRCLIB-совместимый сервис.
-    if (!best) {
+    if (!best && !sourceIsCooling("karalyr")) {
       try {
         const url =
           `${KARALYR_API}?track_name=${encodeURIComponent(title)}` +
@@ -1790,6 +1906,7 @@ async function getLrclibPlainLyrics(
           headers: { "User-Agent": LRCLIB_UA, Accept: "application/json" },
           signal: AbortSignal.timeout(KARALYR_TIMEOUT),
         });
+        if (res.status === 429) coolDownSource("karalyr", res.headers);
         if (res.ok) {
           const entry = await res.json();
           const plain = entry?.plainLyrics;
@@ -1813,7 +1930,7 @@ async function getLrclibPlainLyrics(
     // обычный текст, когда на LRCLIB записи нет вовсе. Ищем по паре «артист +
     // название»: Lrcmux находит перезаливы, где в теге стоит ник загрузившего
     // («lightprey»), а на странице указан настоящий исполнитель.
-    if (!best) {
+    if (!best && !sourceIsCooling("lrcmux")) {
       try {
         const url =
           `${LRCMUX_API}?artist=${encodeURIComponent(artist)}` +
@@ -1822,6 +1939,7 @@ async function getLrclibPlainLyrics(
           headers: { "User-Agent": LRCLIB_UA },
           signal: AbortSignal.timeout(KARALYR_TIMEOUT),
         });
+        if (res.status === 429) coolDownSource("lrcmux", res.headers);
         if (res.ok) {
           const body = await res.text();
           const plain = stripLrcTimestamps(body);
@@ -1889,8 +2007,26 @@ async function getSyncedLyrics(
 
     let best: { entry: any; score: number } | null = null;
 
+    // Точная запись по «артист + название + длительность»: для караоке это
+    // самый надёжный путь, ведь тайминги должны совпасть со звуком.
+    const exact = await lrclibExactEntry(title, artist, durationMs);
+    if (exact) {
+      const synced = exact.syncedLyrics;
+      if (
+        typeof synced === "string" &&
+        hasLrcTimestamps(synced) &&
+        versionMarkersCompatible(title, String(exact.trackName ?? ""))
+      ) {
+        const score = scoreLrcTrack(exact, cleanTitle(title), artist, durationMs);
+        if (score >= 6) best = { entry: exact, score };
+      }
+    }
+
     for (const t of titles) {
       for (const a of artists) {
+        // Источник на паузе после 429 — не тратим на него запросы.
+        if (sourceIsCooling("lrclib")) break;
+
         const url =
           `${LRCLIB_API}?track_name=${encodeURIComponent(t)}` +
           `&artist_name=${encodeURIComponent(a)}`;
@@ -1900,6 +2036,10 @@ async function getSyncedLyrics(
           signal: AbortSignal.timeout(LRCLIB_TIMEOUT),
         });
 
+        if (res.status === 429) {
+          coolDownSource("lrclib", res.headers);
+          break;
+        }
         if (!res.ok) continue;
 
         const list = await res.json();
@@ -1942,6 +2082,8 @@ async function getSyncedLyrics(
       const spellArtists = [artist, ""];
       spellLoop: for (const variant of variants) {
         for (const a of spellArtists) {
+          if (sourceIsCooling("lrclib")) break spellLoop;
+
           const url =
             `${LRCLIB_API}?track_name=${encodeURIComponent(variant)}` +
             (a ? `&artist_name=${encodeURIComponent(a)}` : "");
@@ -1954,6 +2096,10 @@ async function getSyncedLyrics(
             });
           } catch {
             continue;
+          }
+          if (res.status === 429) {
+            coolDownSource("lrclib", res.headers);
+            break spellLoop;
           }
           if (!res.ok) continue;
 
@@ -1988,7 +2134,7 @@ async function getSyncedLyrics(
     }
 
     // Fallback: Karalyr — LRCLIB-совместимый сервис с word-synced караоке.
-    if (!best) {
+    if (!best && !sourceIsCooling("karalyr")) {
       try {
         const url =
           `${KARALYR_API}?track_name=${encodeURIComponent(title)}` +
@@ -1998,6 +2144,7 @@ async function getSyncedLyrics(
           headers: { "User-Agent": LRCLIB_UA, Accept: "application/json" },
           signal: AbortSignal.timeout(KARALYR_TIMEOUT),
         });
+        if (res.status === 429) coolDownSource("karalyr", res.headers);
         if (res.ok) {
           const entry = await res.json();
           const synced = entry?.syncedLyrics;
@@ -2018,7 +2165,7 @@ async function getSyncedLyrics(
     }
 
     // Fallback: Lrcmux — агрегатор с word-level (Enhanced LRC) караоке.
-    if (!best) {
+    if (!best && !sourceIsCooling("lrcmux")) {
       try {
         const url =
           `https://api.lrcmux.dev/get?artist=${encodeURIComponent(artist)}` +
@@ -2028,6 +2175,7 @@ async function getSyncedLyrics(
           headers: { "User-Agent": LRCLIB_UA },
           signal: AbortSignal.timeout(LRCLIB_TIMEOUT),
         });
+        if (res.status === 429) coolDownSource("lrcmux", res.headers);
         if (res.ok) {
           const body = await res.text();
           if (body.trim().length > 20 && hasLrcTimestamps(body)) {
