@@ -1558,10 +1558,10 @@ async fn get_lrclib_plain_lyrics(title: &str, artist: &str, duration_ms: f64) ->
         return serde_json::from_value(cached).unwrap_or_default();
     }
 
-    let mut best: Option<(f32, Value)> = None;
-
     // Сначала прямой адрес записи: артист и название известны, длительность
     // известна — точнее этого запроса не бывает. Оценка всё равно применяется.
+    // Если запись подошла, она и будет лучшей: точнее её уже не найти.
+    let mut direct: Option<(f32, Value)> = None;
     if !artist.is_empty() && duration_ms > 0.0 {
         let exact_title = clean_title(title);
         if let Some(entry) = lrclib_exact_entry(title, artist, duration_ms, "").await {
@@ -1574,7 +1574,7 @@ async fn get_lrclib_plain_lyrics(title: &str, artist: &str, duration_ms: f64) ->
             {
                 let score = score_lrc_track(&entry, &exact_title, artist, duration_ms);
                 if score >= 4.0 {
-                    best = Some((score, entry));
+                    direct = Some((score, entry));
                 }
             }
         }
@@ -1600,7 +1600,9 @@ async fn get_lrclib_plain_lyrics(title: &str, artist: &str, duration_ms: f64) ->
     artists.push(String::new());
     artists.truncate(3);
 
-    let mut best: Option<(f32, Value)> = None;
+    // Прямая запись — заведомо лучшая; поиск по вариантам только если она
+    // не подошла, иначе он затирал бы точный результат случайным совпадением.
+    let mut best: Option<(f32, Value)> = direct;
 
     'outer: for t in &titles {
         for a in &artists {
