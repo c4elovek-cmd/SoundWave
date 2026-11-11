@@ -151,6 +151,33 @@
   -webkit-text-fill-color: transparent;
 }
 
+/* Режим «по слогам»: слово делится на слоги, каждый заливается в свой
+   отрезок времени. Фон у самого слова отключаем — иначе слог перекрыл бы
+   его своим градиентом. */
+.karaoke-syllable {
+  display: inline;
+  white-space: pre-wrap;
+}
+
+.karaoke-active .karaoke-word .karaoke-syllable {
+  --syllable-fill: 0%;
+  background: linear-gradient(
+    90deg,
+    var(--accent) 0 var(--syllable-fill),
+    var(--text-primary) var(--syllable-fill) 100%
+  );
+  -webkit-background-clip: text;
+  background-clip: text;
+  color: transparent;
+  -webkit-text-fill-color: transparent;
+}
+
+.karaoke-active .karaoke-word:has(.karaoke-syllable) {
+  background: none;
+  -webkit-text-fill-color: currentColor;
+  color: inherit;
+}
+
 @keyframes lyrics-line-in {
   from {
     opacity: 0.4;

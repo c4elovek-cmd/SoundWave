@@ -1,10 +1,12 @@
 import { memo, useMemo } from "react";
-import { splitKaraokeWords } from "../../lib/lyrics";
+import { splitKaraokeIntoSyllables, splitKaraokeWords } from "../../lib/lyrics";
 
 interface KaraokeLineProps {
   text: string;
   /** Секции вроде [Припев] не заливаются. */
   section?: boolean;
+  /** По слогам слово рисуется как набор слогов со своими отрезками времени. */
+  syllableMode?: boolean;
 }
 
 /**
@@ -20,8 +22,11 @@ interface KaraokeLineProps {
  * компонент 60 раз в секунду), а напрямую в DOM из цикла анимации —
  * функцией {@link paintKaraokeWords}.
  */
-function KaraokeLineBase({ text, section }: KaraokeLineProps) {
-  const words = useMemo(() => splitKaraokeWords(text), [text]);
+function KaraokeLineBase({ text, section, syllableMode }: KaraokeLineProps) {
+  const words = useMemo(() => {
+    const split = splitKaraokeWords(text);
+    return syllableMode ? splitKaraokeIntoSyllables(split) : split;
+  }, [text, syllableMode]);
 
   if (section) {
     return <>{text}</>;
@@ -39,7 +44,20 @@ function KaraokeLineBase({ text, section }: KaraokeLineProps) {
             data-from={word.from}
             data-to={word.to}
           >
-            {word.text}
+            {word.syllables
+              ? word.syllables.map((syllable, syllableIndex) => (
+                  <span
+                    // Слог красится внутри своего отрезка, поэтому ему
+                    // нужны собственные метки времени.
+                    key={syllableIndex}
+                    className="karaoke-syllable"
+                    data-from={syllable.from}
+                    data-to={syllable.to}
+                  >
+                    {syllable.text}
+                  </span>
+                ))
+              : word.text}
           </span>
         );
       })}
@@ -79,7 +97,7 @@ const paintCache = new WeakMap<HTMLElement, PaintCache>();
 export function paintKaraokeWords(
   root: HTMLElement | null,
   progress: number,
-  mode: "letters" | "words" = "letters"
+  mode: "letters" | "syllables" | "words" = "letters"
 ): void {
   if (!root) return;
 
@@ -111,8 +129,25 @@ export function paintKaraokeWords(
 
     // По словам: слово загорается целиком, когда до него дошла очередь,
     // и остаётся подсвеченным до конца строки.
+    // По слогам: слово идёт целиком, а внутри него заливаются слоги —
+    // ближе к тому, как слово поётся, но без оценки по каждой букве.
     // По буквам: заливка идёт внутри слова плавно — точность приблизительная,
     // потому что время букв оценивается по длине слова.
+    if (mode === "syllables") {
+      word.style.setProperty("--word-fill", "0%");
+      const local = Math.min(1, Math.max(0, (progress - from) / span));
+      word.classList.toggle("karaoke-word-on", local > 0);
+
+      for (const syllable of word.querySelectorAll<HTMLElement>(".karaoke-syllable")) {
+        const sFrom = Number(syllable.dataset.from ?? 0);
+        const sTo = Number(syllable.dataset.to ?? 1);
+        const sSpan = Math.max(0.0001, sTo - sFrom);
+        const sLocal = Math.min(1, Math.max(0, (progress - sFrom) / sSpan));
+        syllable.style.setProperty("--syllable-fill", `${(sLocal * 100).toFixed(1)}%`);
+      }
+      continue;
+    }
+
     const local =
       mode === "words"
         ? progress >= from

@@ -656,7 +656,95 @@ export interface KaraokeWord {
   from: number;
   /** Конец слова внутри строки, 0..1. */
   to: number;
+  /** Слоги слова (только для режима «по слогам»). */
+  syllables?: { text: string; from: number; to: number }[];
 }
+
+/**
+ * Гласные — центр слога. Русские и латинские буквы дают слог на каждую
+ * гласную; согласные без гласной уходят к предыдущему слогу.
+ */
+const VOWELS = /[аеёиоуыэюяaeiou]/i;
+
+/**
+ * Делит слово на слоги для караоке.
+ *
+ * Слог — гласная или группа гласных вместе с окружающими согласными. Для
+ * одного слога возвращается само слово: делить нечего.
+ */
+export function splitKaraokeSyllables(word: string): string[] {
+  const core = word.match(/[\p{L}\p{N}’']+/u)?.[0];
+  if (!core) return [word];
+
+  const chars = Array.from(core);
+  const vowels = chars.map((ch) => VOWELS.test(ch));
+
+  // Английские диграфы — одна согласная, а не две: «Breathe» делится как
+  // «Brea-the», а не «Breat-he». Иначе латиница режется по русским правилам.
+  const DIGRAPHS = new Set(["th", "ch", "sh", "ph", "wh", "ck", "gh", "ng", "qu"]);
+  const isCons = (i: number) =>
+    /[\p{L}\p{N}]/u.test(chars[i]) && !vowels[i] && chars[i] !== "'" && chars[i] !== "’";
+
+  /** Сколько согласных по «весу» в группе: диграф считается за одну. */
+  const groupWeight = (from: number, to: number): number => {
+    let weight = 0;
+    for (let i = from; i < to; i++) {
+      const pair = (chars[i] + (chars[i + 1] ?? "")).toLowerCase();
+      if (i + 1 < to && DIGRAPHS.has(pair)) {
+        weight += 1;
+        i++;
+      } else {
+        weight += 1;
+      }
+    }
+    return weight;
+  };
+
+  const bounds: number[] = [];
+
+  for (let i = 1; i < chars.length; i++) {
+    // Граница слога — стык гласной и согласных за ней. Согласные делятся
+    // по правилу пропевания: одиночная целиком уходит к следующей гласной
+    // («ма-ши-на», «вре-мя»), из группы последняя тоже уходит вперёд,
+    // остальные остаются в предыдущем слоге («де-во-чка», «стре-ла»).
+    if (!vowels[i - 1] || vowels[i]) continue;
+
+    let end = i;
+    while (end < chars.length && isCons(end)) end++;
+    // Согласные в конце слова не открывают новый слог — остаются с предыдущим.
+    if (end >= chars.length) continue;
+
+    // Немая «e» в конце («Breathe», «one», «shine») не создаёт слог —
+    // вторая половина слова сливается с первой. Кириллицы это не касается:
+    // там «е» всегда звучит.
+    const silentE =
+      end === chars.length - 1 &&
+      end > 1 &&
+      (chars[end] === "e" || chars[end] === "E") &&
+      !/[а-яё]/i.test(chars[i - 1]);
+    if (silentE) continue;
+
+    const cut = groupWeight(i, end) >= 2 ? end - 1 : i;
+    if (cut > 0 && (bounds.length === 0 || cut > bounds[bounds.length - 1])) {
+      bounds.push(cut);
+    }
+  }
+
+  if (bounds.length === 0) return [word];
+
+  const prefix = core.slice(0, word.indexOf(core));
+  const suffix = word.slice(word.indexOf(core) + core.length);
+  const out: string[] = [];
+  let start = 0;
+  for (const end of [...bounds, chars.length]) {
+    if (end <= start) continue;
+    out.push((start === 0 ? prefix : "") + chars.slice(start, end).join(""));
+    start = end;
+  }
+  if (suffix) out[out.length - 1] += suffix;
+  return out;
+}
+
 
 /**
  * Делит строку на слова и считает, какую долю времени занимает каждое.
@@ -693,6 +781,34 @@ export function splitKaraokeWords(text: string): KaraokeWord[] {
   }
 
   return result;
+}
+
+/**
+ * Добавляет каждому слову его слоги с долями времени внутри слова.
+ *
+ * Время слога внутри слова делится по длине слога: приближение, но
+ * точнее, чем «всё слово сразу». Для режима «по буквам» не вызывается —
+ * там заливка идёт внутри слова плавно.
+ */
+export function splitKaraokeIntoSyllables(words: KaraokeWord[]): KaraokeWord[] {
+  return words.map((word) => {
+    if (word.space) return word;
+
+    const parts = splitKaraokeSyllables(word.text);
+    if (parts.length <= 1) return word;
+
+    const total = parts.reduce((sum, part) => sum + part.length, 0);
+    const span = word.to - word.from;
+    let acc = 0;
+
+    const syllables = parts.map((part) => {
+      const from = word.from + (span * acc) / total;
+      acc += part.length;
+      return { text: part, from, to: word.from + (span * acc) / total };
+    });
+
+    return { ...word, syllables };
+  });
 }
 
 // ---------------------------------------------------------------------------

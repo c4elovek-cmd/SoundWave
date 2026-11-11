@@ -39,6 +39,8 @@ interface LyricsState {
   syncTrackId: number | null;
   load: (track: SCTrack | null) => Promise<void>;
   loadSynced: (track: SCTrack | null) => Promise<void>;
+  /** Загрузить текст и тайминги, не трогая открытую панель (для очереди). */
+  prefetch: (track: SCTrack | null) => Promise<void>;
 }
 
 const CACHE_KEY = "sw-lyrics-cache-v4";
@@ -261,6 +263,47 @@ export const useLyricsStore = create<LyricsState>((set, get) => ({
       if (get().trackId !== track.id) return;
       // Не страшно: панель разложит строки по длительности сама.
       set({ synced: { found: false }, syncLoading: false });
+    }
+  },
+
+  prefetch: async (track) => {
+    // Заранее ищем текст и караоке для следующих треков очереди: к началу
+    // песни они уже лежат в кэше, и караоке включается без задержки.
+    // Состояние панели здесь не трогаем — этим занимается load().
+    if (!track?.id) return;
+
+    const cached = readCache()[lyricsKey(track)];
+    if (cached && isFresh(cached)) return;
+
+    try {
+      if (!window.electronAPI?.getLyrics) return;
+
+      const response = await window.electronAPI.getLyrics(
+        track.title,
+        track.user?.username ?? "",
+        track.description ?? "",
+        track.duration ?? 0
+      );
+
+      // Ошибки сети не кэшируем — при открытии попробуем снова.
+      if (!response.error) {
+        const cache = readCache();
+        cache[lyricsKey(track)] = { ...response, savedAt: Date.now() };
+        saveCache(cache);
+      }
+
+      if (!response.found || response.tempoModified) return;
+      if (!window.electronAPI?.getSyncedLyrics) return;
+
+      // Тайминги ищем по каноническому названию: у перезалива на SoundCloud
+      // оно искажено, и по сырому имени LRCLIB ничего не находит.
+      await window.electronAPI.getSyncedLyrics(
+        response.title ?? track.title,
+        response.artist ?? track.user?.username ?? "",
+        track.duration ?? 0
+      );
+    } catch {
+      // Предзагрузка не критична: не вышло — текст найдётся при открытии.
     }
   },
 }));

@@ -369,7 +369,10 @@ export default function LyricsPanel() {
                   {line.isSection ? (
                     line.text.slice(1, -1)
                   ) : karaokeActive ? (
-                    <KaraokeLine text={line.text} />
+                    <KaraokeLine
+                      text={line.text}
+                      syllableMode={karaokeMode === "syllables"}
+                    />
                   ) : (
                     line.text
                   )}

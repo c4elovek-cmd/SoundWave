@@ -550,20 +550,36 @@ export default function SettingsModal() {
               </Row>
 
               <Row
+                label="Искать текст и караоке заранее"
+                hint="Текст и тайминги ищутся для текущего трека и следующих в очереди ещё до того, как песня заиграет. Караоке включается мгновенно, а сеть не дёргается посреди песни"
+              >
+                <Switch
+                  checked={settings.lyricsPrefetch}
+                  onChange={(value) => setSetting("lyricsPrefetch", value)}
+                  label="Искать текст и караоке заранее"
+                  {...middleReset("Искать текст и караоке заранее", "lyricsPrefetch")}
+                />
+              </Row>
+
+              <Row
                 label="Подсветка в караоке"
-                hint="По буквам: заливка идёт внутри слова, время букв оценивается приблизительно. По словам: слово загорается целиком и остаётся подсвеченным"
+                hint="По буквам: заливка идёт внутри слова по буквам. По слогам: слово делится на слоги («ма-ши-на»), каждый заливается по очереди. По словам: слово загорается целиком и остаётся подсвеченным"
               >
                 <div
                   className="settings-segmented"
                   {...middleReset("Подсветка в караоке", "karaokeMode")}
                 >
-                  {(["letters", "words"] as const).map((value) => (
+                  {(["letters", "syllables", "words"] as const).map((value) => (
                     <button
                       key={value}
                       className={settings.karaokeMode === value ? "active" : ""}
                       onClick={() => setSetting("karaokeMode", value)}
                     >
-                      {value === "letters" ? "По буквам" : "По словам"}
+                      {value === "letters"
+                        ? "По буквам"
+                        : value === "syllables"
+                          ? "По слогам"
+                          : "По словам"}
                     </button>
                   ))}
                 </div>

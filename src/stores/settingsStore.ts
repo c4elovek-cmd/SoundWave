@@ -3,8 +3,8 @@ import { create } from "zustand";
 export type Density = "comfortable" | "compact";
 export type RepeatSetting = "off" | "all" | "one";
 export type UiStyle = "classic" | "minimal" | "contrast" | "glass" | "threeD" | "bento" | "md3";
-/** Как подсвечивается текст в караоке: по буквам или словами целиком. */
-export type KaraokeMode = "letters" | "words";
+/** Как подсвечивается текст в караоке: по буквам, по слогам или словами целиком. */
+export type KaraokeMode = "letters" | "syllables" | "words";
 
 export interface CustomFontInfo {
   /** Уникальный id файла */
@@ -34,11 +34,14 @@ export interface SettingsValues {
   lyricsFontSize: number;
   karaokeFontSize: number;
   karaokeEnabled: boolean;
-  /** letters — буквы загораются по ходу слова (приблизительно); words — слово целиком. */
+  /** letters — буквы загораются по ходу слова (приблизительно); syllables — слово
+   *  делится на слоги и загорается слог за слогом; words — слово целиком. */
   karaokeMode: KaraokeMode;
   /** Сдвиг таймингов караоке в миллисекундах: минус — раньше, плюс — позже. */
   karaokeOffsetMs: number;
   exactSync: boolean;
+  /** Искать текст и караоке заранее: за текущий трек и за следующие в очереди. */
+  lyricsPrefetch: boolean;
 
   // Плеер
   volume: number;
@@ -81,6 +84,7 @@ export const DEFAULTS: SettingsValues = {
   karaokeMode: "letters",
   karaokeOffsetMs: 0,
   exactSync: true,
+  lyricsPrefetch: true,
 
   volume: 0.8,
   shuffleOnStart: false,
@@ -179,6 +183,7 @@ export const useSettingsStore = create<SettingsState>((set, get) => ({
       karaokeMode: state.karaokeMode,
       karaokeOffsetMs: state.karaokeOffsetMs,
       exactSync: state.exactSync,
+      lyricsPrefetch: state.lyricsPrefetch,
       volume: state.volume,
       shuffleOnStart: state.shuffleOnStart,
       repeatOnStart: state.repeatOnStart,

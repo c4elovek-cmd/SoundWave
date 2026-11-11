@@ -315,7 +315,11 @@ export default function KaraokeFullscreen() {
                   line.isSection ? " section" : ""
                 }`}
               >
-                <KaraokeLine text={line.text} section={line.isSection} />
+                <KaraokeLine
+                  text={line.text}
+                  section={line.isSection}
+                  syllableMode={karaokeMode === "syllables"}
+                />
               </div>
             ))}
           </div>

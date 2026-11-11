@@ -39,6 +39,7 @@ import { pushDiscordPresence } from "./lib/discordPresence";
 import { runtimeName } from "./lib/runtime";
 import { setActionLogEnabled } from "./lib/actionLog";
 import { useSettingsStore } from "./stores/settingsStore";
+import { useLyricsStore } from "./stores/lyricsStore";
 import { initNetworkMonitoring, useNetworkStore } from "./stores/networkStore";
 import "./stores/historyStore";
 import "./components/Layout/Layout.css";
@@ -182,6 +183,49 @@ export default function App() {
     return () => {
       off?.();
       document.removeEventListener("visibilitychange", apply);
+    };
+  }, []);
+
+  // Текст и караоке заранее: к началу песни текст уже в кэше, и караоке
+  // включается без задержки. Идём по очереди по одному запросу — одновременно
+  // несколько поисков упираются в лимиты Genius и LRCLIB.
+  useEffect(() => {
+    let cancelled = false;
+    let timer: number | undefined;
+
+    const run = async () => {
+      const settings = useSettingsStore.getState();
+      if (!settings.lyricsPrefetch) return;
+      // Караоке выключено и точные тайминги не нужны — хватит текста,
+      // но его мы всё равно держим в кэше для панели.
+
+      const { queue, queueIndex, currentTrack } = usePlayerStore.getState();
+      const upcoming = [currentTrack, ...queue.slice(queueIndex + 1, queueIndex + 4)]
+        .filter((track): track is NonNullable<typeof track> => Boolean(track));
+
+      for (const track of upcoming) {
+        if (cancelled) return;
+
+        // Следующий трек — сразу, остальные с паузой: не мешаем звуку.
+        await useLyricsStore.getState().prefetch(track);
+        if (cancelled) return;
+        await new Promise<void>((resolve) => {
+          timer = window.setTimeout(resolve, 1200);
+        });
+      }
+    };
+
+    void run();
+
+    // Смена трека перезапускает проход: очередь могла поменяться.
+    const unsub = usePlayerStore.subscribe((state, prev) => {
+      if (state.currentTrack?.id !== prev.currentTrack?.id) void run();
+    });
+
+    return () => {
+      cancelled = true;
+      if (timer !== undefined) window.clearTimeout(timer);
+      unsub();
     };
   }, []);
 
