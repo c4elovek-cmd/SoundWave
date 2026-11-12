@@ -7,6 +7,7 @@ import {
   Copy,
   FolderOpen,
   Gear,
+  Heart,
   Microphone,
   PaintBrush,
   Plus,
@@ -1160,6 +1161,23 @@ export default function SettingsModal() {
               >
                 <ArrowSquareOut size={15} />
                 GitHub
+              </button>
+            </Row>
+
+            <Row
+              label="Благодарности"
+              hint="Идеи и решения подсмотрены в проекте NeDotify"
+            >
+              <button
+                className="settings-button"
+                onClick={() =>
+                  void window.electronAPI?.openExternal(
+                    "https://github.com/vitalygotska/NeDotify"
+                  )
+                }
+              >
+                <Heart size={15} />
+                NeDotify
               </button>
             </Row>
 
