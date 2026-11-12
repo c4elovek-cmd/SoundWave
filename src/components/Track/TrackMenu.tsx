@@ -14,7 +14,7 @@ import {
 import { SCTrack } from "../../types/soundcloud";
 import { usePlayerStore } from "../../stores/playerStore";
 import { useAppStore } from "../../stores/appStore";
-import { downloadTrack, useDownloadStore } from "../../stores/downloadStore";
+import { downloadTrack, trackMeta, useDownloadStore } from "../../stores/downloadStore";
 import { trackUrl } from "../../lib/soundcloudLinks";
 import { showToast } from "../../stores/toastStore";
 import { logAction } from "../../lib/actionLog";
@@ -113,7 +113,7 @@ export default function TrackMenu({ track, queue, x, y, onClose }: Props) {
       disabled: Boolean(track.localPath) || download?.state === "started" || download?.state === "progress",
       onClick: () => {
         logAction("track.download", { id: track.id, title: track.title });
-        void downloadTrack(track.id, track.title, track.user?.username ?? "");
+        void downloadTrack(track.id, track.title, track.user?.username ?? "", trackMeta(track));
       },
     },
   ];

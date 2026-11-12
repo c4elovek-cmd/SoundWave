@@ -27,6 +27,7 @@ import { useWaveStore } from "../../stores/waveStore";
 import {
   downloadTrack,
   ensureDownloadSubscription,
+  trackMeta,
   useDownloadStore,
 } from "../../stores/downloadStore";
 import { formatDuration } from "../../lib/soundcloud-api";
@@ -303,7 +304,8 @@ export default function Player() {
             void downloadTrack(
               currentTrack.id,
               currentTrack.title,
-              currentTrack.user?.username ?? ""
+              currentTrack.user?.username ?? "",
+              trackMeta(currentTrack)
             );
           }}
           title="Скачать трек"

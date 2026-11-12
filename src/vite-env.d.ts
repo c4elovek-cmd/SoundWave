@@ -92,7 +92,14 @@ declare global {
       downloadTrack: (
         trackId: number,
         title: string,
-        artist: string
+        artist: string,
+        meta?: {
+          genre?: string | null;
+          year?: number | null;
+          artworkUrl?: string | null;
+          description?: string | null;
+          permalinkUrl?: string | null;
+        }
       ) => Promise<{ ok: boolean; path?: string; error?: string }>;
       /** Скачан ли трек: файл «Артист - Трек.mp3» в загрузках. */
       findDownload: (

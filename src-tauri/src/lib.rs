@@ -1505,6 +1505,141 @@ fn ffmpeg_command(exe: &std::path::Path) -> tokio::process::Command {
     command
 }
 
+/// Метаданные трека для записи в теги mp3.
+///
+/// SoundCloud отдаёт только плоские поля; в ID3 им соответствуют title,
+/// artist, album (здесь — имя лейбла, если есть), genre, date и comment
+/// (ссылка на исходник — по ней легко найти трек снова).
+struct TrackTags {
+    title: String,
+    artist: String,
+    genre: Option<String>,
+    year: Option<i64>,
+    description: Option<String>,
+    permalink_url: Option<String>,
+    artwork_url: Option<String>,
+}
+
+impl TrackTags {
+    /// Аргументы `-metadata key=value` для ffmpeg.
+    fn ffmpeg_args(&self) -> Vec<(String, String)> {
+        let mut args: Vec<(String, String)> = vec![
+            ("title".into(), self.title.clone()),
+            ("artist".into(), self.artist.clone()),
+        ];
+
+        if let Some(genre) = self.genre.as_deref().filter(|g| !g.trim().is_empty()) {
+            args.push(("genre".into(), genre.trim().to_string()));
+        }
+        if let Some(year) = self.year.filter(|y| *y > 0) {
+            args.push(("date".into(), year.to_string()));
+        }
+        // Комментарий — ссылка на исходник: по ней трек находится за секунды.
+        if let Some(url) = self.permalink_url.as_deref().filter(|u| !u.trim().is_empty()) {
+            args.push(("comment".into(), url.trim().to_string()));
+        }
+        // Описание — в лирику-поле не лезем, кладём в comment, если ссылки нет.
+        if !args.iter().any(|(key, _)| key == "comment") {
+            if let Some(text) = self.description.as_deref().map(str::trim).filter(|t| !t.is_empty()) {
+                let short: String = text.chars().take(500).collect();
+                args.push(("comment".into(), short));
+            }
+        }
+
+        args
+    }
+
+    /// Есть ли что встраивать, кроме названия и исполнителя.
+    fn has_extras(&self) -> bool {
+        self.ffmpeg_args().len() > 2 || self.artwork_url.is_some()
+    }
+}
+
+/// Скачивает обложку во временный файл — ffmpeg встраивает её как
+/// вложенную картинку. Возвращает путь, если картинка получена.
+async fn fetch_artwork(url: &str, track_id: u64) -> Option<std::path::PathBuf> {
+    let trimmed = url.trim();
+    if trimmed.is_empty() {
+        return None;
+    }
+
+    let stamp = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| d.as_millis())
+        .unwrap_or(0);
+    let path = std::env::temp_dir().join(format!("soundwave-cover-{track_id}-{stamp}.jpg"));
+
+    let response = reqwest::Client::new()
+        .get(trimmed)
+        .header("User-Agent", crate::soundcloud::BROWSER_UA)
+        .timeout(std::time::Duration::from_secs(15))
+        .send()
+        .await
+        .ok()?;
+    if !response.status().is_success() {
+        return None;
+    }
+    let bytes = response.bytes().await.ok()?;
+    if bytes.is_empty() || bytes.len() > 12 * 1024 * 1024 {
+        return None;
+    }
+
+    tokio::fs::write(&path, &bytes).await.ok()?;
+    Some(path)
+}
+
+/// Переписывает теги и обложку готового mp3 без перекодирования звука.
+///
+/// `-codec copy` сохраняет исходный поток байт-в-байт, поэтому качество не
+/// теряется, а время работы — доли секунды. Обложка добавляется вторым
+/// входом как `attached_pic`; старые обложки заменяются (`-map_metadata`
+/// не нужен: метаданные задаём явно).
+async fn tag_mp3(
+    ffmpeg: &std::path::Path,
+    file: &std::path::Path,
+    tags: &TrackTags,
+    artwork: Option<&std::path::Path>,
+) -> Result<(), String> {
+    let stamp = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| d.as_millis())
+        .unwrap_or(0);
+    let temp = std::env::temp_dir().join(format!("soundwave-tag-{stamp}.mp3"));
+
+    let mut command = ffmpeg_command(ffmpeg);
+    command
+        .args(["-hide_banner", "-loglevel", "error", "-y"])
+        .arg("-i")
+        .arg(file);
+
+    if let Some(cover) = artwork {
+        command.arg("-i").arg(cover);
+    }
+
+    command.args(["-map", "0:a"]);
+    if artwork.is_some() {
+        command
+            .args(["-map", "1:v", "-c:v", "mjpeg", "-disposition:v", "attached_pic"]);
+    }
+    command.args(["-codec:a", "copy"]);
+
+    for (key, value) in tags.ffmpeg_args() {
+        command.arg("-metadata").arg(format!("{key}={value}"));
+    }
+
+    command.arg(&temp).output().await.map_err(|e| e.to_string())?
+        .status
+        .success()
+        .then_some(())
+        .ok_or_else(|| "ffmpeg не смог записать теги".to_string())?;
+
+    // Переписываем только при успехе: иначе исходник остался бы нетронутым.
+    tokio::fs::rename(&temp, file)
+        .await
+        .map_err(|e| format!("Не удалось заменить файл: {e}"))?;
+    Ok(())
+}
+
 /// Скачать трек в папку «Загрузки» в формате mp3.
 ///
 /// SoundCloud почти всегда отдаёт HLS с fMP4, а не готовый mp3, поэтому
@@ -1518,6 +1653,11 @@ async fn download_track(
     track_id: u64,
     title: String,
     artist: String,
+    genre: Option<String>,
+    year: Option<i64>,
+    artwork_url: Option<String>,
+    description: Option<String>,
+    permalink_url: Option<String>,
 ) -> Result<Value, String> {
     use tokio::io::AsyncWriteExt;
 
@@ -1558,6 +1698,18 @@ async fn download_track(
         );
         e
     })?;
+
+    // Теги пишем и при перекодировании, и при простом переносе mp3:
+    // иначе в плеерах вместо названия и исполнителя был бы виден файл.
+    let tags = TrackTags {
+        title: title.clone(),
+        artist: artist.clone(),
+        genre,
+        year,
+        description,
+        permalink_url,
+        artwork_url,
+    };
 
     // Качаем во временный файл: итоговый путь занимаем только готовым mp3,
     // чтобы в «Загрузках» не появлялись недокачанные обрывки.
@@ -1673,6 +1825,13 @@ async fn download_track(
     let path = unique_path(&dir, &file_name);
     let path_text = path.to_string_lossy().to_string();
 
+    // Обложка скачивается параллельно финальной обработке: она не блокирует
+    // звук, а отсутствие сети для картинки не должно ломать скачивание.
+    let artwork = match tags.artwork_url.as_deref() {
+        Some(url) => fetch_artwork(url, track_id).await,
+        None => None,
+    };
+
     if stream.extension == "mp3" {
         // Уже mp3 — просто переносим на место.
         if let Err(e) = tokio::fs::rename(&temp_path, &path).await {
@@ -1690,6 +1849,21 @@ async fn download_track(
                 return Err(message);
             }
             let _ = tokio::fs::remove_file(&temp_path).await;
+        }
+
+        // Теги и обложка без перекодирования: `-codec copy` не трогает аудио,
+        // файл лишь получает ID3. Ошибка тегов не ломает скачивание — файл
+        // уже на месте, звук цел.
+        if tags.has_extras() {
+            let ffmpeg = tokio::task::spawn_blocking(find_ffmpeg)
+                .await
+                .ok()
+                .flatten();
+            if let Some(ffmpeg) = ffmpeg {
+                if let Err(e) = tag_mp3(&ffmpeg, &path, &tags, artwork.as_deref()).await {
+                    log::warn!("Не удалось записать теги в {path_text}: {e}");
+                }
+            }
         }
     } else {
         // Поиск ffmpeg запускает процесс — уводим его из потока рантайма.
@@ -1714,20 +1888,30 @@ async fn download_track(
 
         report_download(&app, track_id, "progress", 95, Value::Null);
 
-        let output = ffmpeg_command(&ffmpeg)
+        // Теги — чтобы плееры показывали исполнителя и название, а не имя
+        // файла; обложка — вложенной картинкой.
+        let mut command = ffmpeg_command(&ffmpeg);
+        command
             .args(["-hide_banner", "-loglevel", "error", "-y"])
             .arg("-i")
-            .arg(&temp_path)
-            .args(["-vn", "-codec:a", "libmp3lame", "-q:a", "2"])
-            // Теги — чтобы плееры показывали исполнителя и название,
-            // а не имя файла.
-            .arg("-metadata")
-            .arg(format!("title={title}"))
-            .arg("-metadata")
-            .arg(format!("artist={artist}"))
-            .arg(&path)
-            .output()
-            .await;
+            .arg(&temp_path);
+
+        if let Some(cover) = artwork.as_deref() {
+            command.arg("-i").arg(cover);
+        }
+
+        command.args(["-map", "0:a"]);
+        if artwork.is_some() {
+            command
+                .args(["-map", "1:v", "-c:v", "mjpeg", "-disposition:v", "attached_pic"]);
+        }
+        command.args(["-vn", "-codec:a", "libmp3lame", "-q:a", "2"]);
+
+        for (key, value) in tags.ffmpeg_args() {
+            command.arg("-metadata").arg(format!("{key}={value}"));
+        }
+
+        let output = command.arg(&path).output().await;
 
         let _ = tokio::fs::remove_file(&temp_path).await;
 
@@ -1760,6 +1944,11 @@ async fn download_track(
                 return Err(message);
             }
         }
+    }
+
+    // Временная обложка больше не нужна.
+    if let Some(cover) = artwork.as_deref() {
+        let _ = tokio::fs::remove_file(cover).await;
     }
 
     report_download(

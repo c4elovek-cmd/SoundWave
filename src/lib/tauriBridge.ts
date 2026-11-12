@@ -329,11 +329,27 @@ export function createTauriBridge(): Window["electronAPI"] {
 
     windowMinimize: () => invoke<boolean>("window_minimize"),
     // --- Скачивание ---
-    downloadTrack: (trackId: number, title: string, artist: string) =>
+    downloadTrack: (
+      trackId: number,
+      title: string,
+      artist: string,
+      meta?: {
+        genre?: string | null;
+        year?: number | null;
+        artworkUrl?: string | null;
+        description?: string | null;
+        permalinkUrl?: string | null;
+      }
+    ) =>
       invoke<{ ok: boolean; path?: string; error?: string }>("download_track", {
         trackId,
         title,
         artist,
+        genre: meta?.genre ?? null,
+        year: meta?.year ?? null,
+        artworkUrl: meta?.artworkUrl ?? null,
+        description: meta?.description ?? null,
+        permalinkUrl: meta?.permalinkUrl ?? null,
       }),
     /** Скачан ли трек — плеер играет такие локально, без сети. */
     findDownload: (title: string, artist: string) =>

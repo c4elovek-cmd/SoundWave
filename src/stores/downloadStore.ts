@@ -121,16 +121,26 @@ export function ensureDownloadSubscription(): void {
 /**
  * Скачать трек в папку «Загрузки».
  *
+ * Метаданные трека передаются бэкенду целиком: он записывает их в ID3-теги
+ * (genre, date, comment-ссылка) и встраивает обложку.
+ *
  * Ошибки не выбрасываем наружу: о них сообщает бэкенд событием
  * `download-progress`, а интерфейс показывает состояние в кнопке.
  */
 export async function downloadTrack(
   trackId: number,
   title: string,
-  artist: string
+  artist: string,
+  meta?: { genre?: string | null; year?: number | null; artworkUrl?: string | null; description?: string | null; permalinkUrl?: string | null }
 ): Promise<void> {
   try {
-    await window.electronAPI?.downloadTrack?.(trackId, title, artist);
+    await window.electronAPI?.downloadTrack?.(trackId, title, artist, {
+      genre: meta?.genre ?? null,
+      year: meta?.year ?? null,
+      artworkUrl: meta?.artworkUrl ?? null,
+      description: meta?.description ?? null,
+      permalinkUrl: meta?.permalinkUrl ?? null,
+    });
   } catch (error) {
     console.error("Не удалось скачать трек:", error);
     useDownloadStore.getState().setInfo(trackId, {
@@ -140,6 +150,19 @@ export async function downloadTrack(
     });
     window.setTimeout(() => useDownloadStore.getState().clear(trackId), 4000);
   }
+}
+
+/** Метаданные для тегов — всё, что SoundCloud отдаёт по треку. */
+export function trackMeta(track: SCTrack) {
+  const parsed = track.created_at ? new Date(track.created_at).getFullYear() : null;
+  const year = Number.isFinite(parsed) ? parsed : null;
+  return {
+    genre: track.genre,
+    year: year !== null && year > 1900 ? year : null,
+    artworkUrl: track.artwork_url?.replace("-large", "-t500x500") ?? null,
+    description: track.description,
+    permalinkUrl: track.permalink_url,
+  };
 }
 
 /** Ждёт, пока бэкенд отчитается о готовности или ошибке по треку. */
@@ -166,7 +189,7 @@ export function downloadTrackAndWait(track: SCTrack): Promise<DownloadInfo> {
       finish({ percent: 0, state: "error", error: "Скачивание прервано по таймауту" });
     }, 15 * 60 * 1000);
 
-    void downloadTrack(track.id, track.title, track.user?.username ?? "");
+    void downloadTrack(track.id, track.title, track.user?.username ?? "", trackMeta(track));
   });
 }
 

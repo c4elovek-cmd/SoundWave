@@ -6,6 +6,7 @@ import { useAppStore } from "../../stores/appStore";
 import {
   downloadTrack,
   ensureDownloadSubscription,
+  trackMeta,
   useDownloadStore,
   useDownloadedTrack,
 } from "../../stores/downloadStore";
@@ -166,7 +167,8 @@ export default function TrackRow({
           void downloadTrack(
             track.id,
             track.title,
-            track.user?.username ?? ""
+            track.user?.username ?? "",
+            trackMeta(track)
           );
         }}
         title={

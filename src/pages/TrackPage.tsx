@@ -10,7 +10,7 @@ import { scApi } from "../lib/soundcloud-api";
 import { errorText } from "../lib/errorText";
 import { usePlayerStore } from "../stores/playerStore";
 import { useAppStore } from "../stores/appStore";
-import { downloadTrack } from "../stores/downloadStore";
+import { downloadTrack, trackMeta } from "../stores/downloadStore";
 import { logAction } from "../lib/actionLog";
 import { SCTrack } from "../types/soundcloud";
 import "./Pages.css";
@@ -122,7 +122,8 @@ export default function TrackPage({ trackId }: { trackId: number }) {
                 void downloadTrack(
                   track.id,
                   track.title,
-                  track.user?.username ?? ""
+                  track.user?.username ?? "",
+                  trackMeta(track)
                 );
               }}
               title="Скачать трек"
