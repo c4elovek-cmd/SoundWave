@@ -22,7 +22,7 @@ interface UpdateState {
 /** Первая проверка — не сразу, чтобы не мешать запуску и загрузке треков. */
 const FIRST_CHECK_DELAY = 12_000;
 /** Периодичность фоновых проверок. */
-const CHECK_INTERVAL = 30 * 60_000;
+const CHECK_INTERVAL = 60_000;
 
 export default function UpdateBanner() {
   const [update, setUpdate] = useState<UpdateState | null>(null);
