@@ -17,6 +17,7 @@ import {
   buildTimedLyricsDetailed,
   findActiveLine,
   lineProgress,
+  LrcWord,
   LyricsLine,
   SyncQuality,
 } from "../../lib/lyrics";
@@ -91,10 +92,11 @@ export default function KaraokeFullscreen() {
             result.lyrics,
             durationSec,
             synced?.syncedLyrics,
-            synced?.duration
+            synced?.duration,
+            synced?.wordSyncedLyrics
           )
         : { lines: [] as LyricsLine[], quality: "estimate" as SyncQuality },
-    [result?.found, result?.lyrics, durationSec, synced?.syncedLyrics, synced?.duration]
+    [result?.found, result?.lyrics, durationSec, synced?.syncedLyrics, synced?.duration, synced?.wordSyncedLyrics]
   );
 
   const timedLines = timed.lines;
@@ -203,6 +205,8 @@ export default function KaraokeFullscreen() {
       index: number;
       isSection: boolean;
       active: boolean;
+      /** Точные пословные тайминги, если модель их отдала. */
+      words?: LrcWord[];
     }[] = [];
 
     for (let i = start; i < end; i++) {
@@ -213,6 +217,7 @@ export default function KaraokeFullscreen() {
         index: i,
         isSection: line.isSection,
         active: i === activeLine,
+        words: line.words,
       });
     }
 
@@ -319,6 +324,7 @@ export default function KaraokeFullscreen() {
                   text={line.text}
                   section={line.isSection}
                   syllableMode={karaokeMode === "syllables"}
+                  timedWords={line.words}
                 />
               </div>
             ))}

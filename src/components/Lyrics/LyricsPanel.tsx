@@ -60,10 +60,11 @@ export default function LyricsPanel() {
             result.lyrics,
             durationSec,
             synced?.syncedLyrics,
-            synced?.duration
+            synced?.duration,
+            synced?.wordSyncedLyrics
           )
         : { lines: [] as LyricsLine[], quality: "estimate" as SyncQuality },
-    [result?.found, result?.lyrics, durationSec, synced?.syncedLyrics, synced?.duration]
+    [result?.found, result?.lyrics, durationSec, synced?.syncedLyrics, synced?.duration, synced?.wordSyncedLyrics]
   );
 
   const timedLines = timed.lines;
@@ -372,6 +373,7 @@ export default function LyricsPanel() {
                     <KaraokeLine
                       text={line.text}
                       syllableMode={karaokeMode === "syllables"}
+                      timedWords={line.words}
                     />
                   ) : (
                     line.text

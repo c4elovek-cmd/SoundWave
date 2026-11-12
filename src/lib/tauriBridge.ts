@@ -187,10 +187,12 @@ export function createTauriBridge(): Window["electronAPI"] {
       invoke<{
         found: boolean;
         syncedLyrics?: string;
+        wordSyncedLyrics?: string;
         title?: string;
         artist?: string;
         duration?: number;
         error?: string;
+        source?: string;
       }>("get_synced_lyrics", { title, artist, duration }),
     openExternal: (url: string) => invoke<boolean>("open_external", { url }),
 

@@ -13,6 +13,13 @@ export interface LyricsLine {
   start: number | null;
   /** Конец строки из LRC (если файл его задаёт), секунды. */
   end?: number | null;
+  /**
+   * Точные пословные тайминги (секунды) — из Enhanced LRC или
+   * нормализованной модели бэкенда. Есть только у строк, совпавших
+   * со строкой источника: заливка караоке идёт по настоящим границам
+   * слов, а не по оценке длины.
+   */
+  words?: LrcWord[];
 }
 
 /** Слово с настоящим временем из расширенного LRC. */
@@ -24,13 +31,78 @@ export interface LrcWord {
   end: number;
 }
 
-interface LrcLine {
+export interface LrcLine {
   time: number;
   text: string;
   /** Конец строки, если его задаёт следующая метка времени. */
   end?: number;
   /** Пословные тайминги из Enhanced LRC (метки <mm:ss.xx>). */
   words?: LrcWord[];
+}
+
+/** Слово из нормализованной модели бэкенда (`wordSyncedLyrics`). */
+export interface KaraokeModelWord {
+  text: string;
+  startMs: number;
+  endMs: number;
+}
+
+/** Строка из нормализованной модели бэкенда. */
+export interface KaraokeModelLine {
+  startMs: number;
+  endMs: number;
+  background?: boolean;
+  words: KaraokeModelWord[];
+}
+
+/** Нормализованная модель караоке: `{syncType, lines}` от Tauri-бэкенда. */
+export interface KaraokeModel {
+  syncType: "word" | "syllable" | "line" | "plain";
+  lines: KaraokeModelLine[];
+}
+
+/**
+ * Разбирает JSON слово-таймингов бэкенда (`wordSyncedLyrics`).
+ *
+ * Бэкенд нормализует TTML/QRC/YRC/Enhanced LRC в единую модель — здесь она
+ * превращается в `LrcLine` с готовыми пословными таймингами, чтобы караоке
+ * красило слова по точным границам из источника, а не по эвристике букв.
+ */
+export function parseKaraokeModel(json: string): LrcLine[] {
+  let model: KaraokeModel;
+  try {
+    model = JSON.parse(json) as KaraokeModel;
+  } catch {
+    return [];
+  }
+  if (!Array.isArray(model?.lines)) return [];
+
+  const lines: LrcLine[] = [];
+  for (const line of model.lines) {
+    if (!Array.isArray(line?.words) || line.words.length === 0) continue;
+    const text = line.words.map((w) => w.text).join("").trim();
+    if (!text) continue;
+
+    const words: LrcWord[] = [];
+    for (const word of line.words) {
+      if (!word?.text?.trim()) continue;
+      words.push({
+        text: word.text,
+        start: word.startMs / 1000,
+        end: word.endMs / 1000,
+      });
+    }
+    if (words.length === 0) continue;
+
+    lines.push({
+      time: line.startMs / 1000,
+      end: line.endMs / 1000,
+      text,
+      words,
+    });
+  }
+  lines.sort((a, b) => a.time - b.time);
+  return lines;
 }
 
 const SECTION_RE = /^\[[^\]]+\]$/;
@@ -157,12 +229,14 @@ function sungIndices(lines: LyricsLine[]): number[] {
 /**
  * Сопоставляет строки LRC со строками Genius по порядку.
  * Возвращает карту «индекс строки Genius → время начала»; если передан
- * ends, в неё же складываются концы строк из LRC.
+ * ends, в неё же складываются концы строк из LRC, а в words — точные
+ * пословные тайминги совпавшей строки.
  */
 export function alignLrc(
   lines: LyricsLine[],
   lrcLines: LrcLine[],
-  ends?: Map<number, number>
+  ends?: Map<number, number>,
+  words?: Map<number, LrcWord[]>
 ): Map<number, number> {
   const candidates = lines
     .map((line, index) => ({ line, index }))
@@ -190,11 +264,19 @@ export function alignLrc(
   const matchedA = new Set<number>();
   const matchedB = new Set<number>();
 
-  // Конец строки из LRC: следующая метка, включая метки-паузы без текста.
-  const takeEnd = (index: number, time: number) => {
-    if (!ends) return;
-    const end = lrcLines[index]?.end;
-    if (end != null && end > time) ends.set(index, end);
+  // Конец строки и слова из LRC — по индексу строки Genius: fillTimings
+  // читает обе карты именно по нему (раньше концы писались по индексу
+  // строки LRC и доставались не тем строкам).
+  const takeMatch = (geniusIndex: number, lrcIndex: number) => {
+    const entry = lrcLines[lrcIndex];
+    if (!entry) return;
+    if (ends) {
+      const end = entry.end;
+      if (end != null && end > entry.time) ends.set(geniusIndex, end);
+    }
+    if (words && entry.words && entry.words.length > 0) {
+      words.set(geniusIndex, entry.words.map((word) => ({ ...word })));
+    }
   };
 
   // Восстанавливаем выравнивание
@@ -203,7 +285,7 @@ export function alignLrc(
   while (i < n && j < m) {
     if (a[i] === b[j]) {
       result.set(candidates[i].index, lrcLines[j].time);
-      takeEnd(j, lrcLines[j].time);
+      takeMatch(candidates[i].index, j);
       matchedA.add(i);
       matchedB.add(j);
       i += 1;
@@ -226,7 +308,7 @@ export function alignLrc(
       if (!sameLine(a[k], b[index])) continue;
 
       result.set(candidates[k].index, lrcLines[index].time);
-      takeEnd(index, lrcLines[index].time);
+      takeMatch(candidates[k].index, index);
       matchedA.add(k);
       matchedB.add(index);
       break;
@@ -271,13 +353,16 @@ function distribute(
 /**
  * Строит тайминги для всех поющихся строк.
  * mapped — известные времена из LRC; ends — концы строк из LRC;
+ * words — точные пословные тайминги совпавших строк (Enhanced LRC
+ * или нормализованная модель бэкенда);
  * промежутки заполняются оценкой.
  */
 function fillTimings(
   lines: LyricsLine[],
   mapped: Map<number, number>,
   duration: number,
-  ends?: Map<number, number>
+  ends?: Map<number, number>,
+  words?: Map<number, LrcWord[]>
 ): LyricsLine[] {
   const result = lines.map((line) => ({ ...line }));
 
@@ -343,6 +428,16 @@ function fillTimings(
     });
   }
 
+  // Точные пословные тайминги: попадают только строкам, совпавшим со
+  // строкой источника, — у остальных слов нет, заливка пойдёт по оценке.
+  if (words) {
+    words.forEach((lineWords, index) => {
+      if (result[index] && lineWords.length > 0) {
+        result[index].words = lineWords;
+      }
+    });
+  }
+
   return result;
 }
 
@@ -378,7 +473,8 @@ function sameLine(a: string, b: string): boolean {
 function alignByOffset(
   lines: LyricsLine[],
   lrcLines: LrcLine[],
-  ends?: Map<number, number>
+  ends?: Map<number, number>,
+  words?: Map<number, LrcWord[]>
 ): { map: Map<number, number>; matches: number } {
   const candidates = lines
     .map((line, index) => ({ line, index }))
@@ -396,6 +492,12 @@ function alignByOffset(
     if (!ends) return;
     const end = lrcLines[lrcIndex]?.end;
     if (end != null && end > time) ends.set(geniusIndex, end);
+    if (words) {
+      const lineWords = lrcLines[lrcIndex]?.words;
+      if (lineWords && lineWords.length > 0) {
+        words.set(geniusIndex, lineWords.map((word) => ({ ...word })));
+      }
+    }
   };
 
   let best: { map: Map<number, number>; matches: number } = {
@@ -522,40 +624,60 @@ export function calibrateLrcDuration(
  * лучше честная равномерная раскладка, чем чужие тайминги. Если точных
  * совпадений мало, но структура строк похожа, тайминги всё равно подбираются
  * по смещению: они настоящие, просто текст немного другой.
+ *
+ * `karaokeModel` — JSON `wordSyncedLyrics` от бэкенда: нормализованная
+ * модель (TTML/QRC/YRC/Enhanced LRC) с точными таймингами слов. Она
+ * предпочтительнее разбора LRC-строки: словные границы там не теряются
+ * при конвертации, а караоке красит по настоящим границам слов.
  */
 export function buildTimedLyricsDetailed(
   lyrics: string,
   duration: number,
   lrc?: string | null,
-  sourceDuration?: number | null
+  sourceDuration?: number | null,
+  karaokeModel?: string | null
 ): TimedLyrics {
   const lines = parseLyrics(lyrics);
   const sung = sungIndices(lines);
 
-  if (lrc && sung.length > 0) {
-    const lrcLines = parseLrc(lrc);
+  // Модель слово-таймингов приоритетнее: у неё точные границы слов.
+  // Если модель не разобралась — падаем на обычный разбор LRC.
+  let lrcLines: LrcLine[] = [];
+  if (karaokeModel) {
+    lrcLines = parseKaraokeModel(karaokeModel);
+  }
+  if (lrcLines.length === 0 && lrc) {
+    lrcLines = parseLrc(lrc);
+  }
+
+  if (lrcLines.length > 0 && sung.length > 0) {
     calibrateLrcDuration(lrcLines, duration, sourceDuration);
 
     const ends = new Map<number, number>();
-    const mapped = alignLrc(lines, lrcLines, ends);
+    const words = new Map<number, LrcWord[]>();
+    const mapped = alignLrc(lines, lrcLines, ends, words);
 
     if (mapped.size >= Math.max(3, sung.length * 0.4)) {
-      return { lines: fillTimings(lines, mapped, duration, ends), quality: "exact" };
+      return { lines: fillTimings(lines, mapped, duration, ends, words), quality: "exact" };
     }
 
     // Точных совпадений мало — пробуем подобрать тайминги по смещению.
-    const aligned = alignByOffset(lines, lrcLines, ends);
-    const threshold = Math.max(2, Math.round(sung.length * 0.15));
+    const aligned = alignByOffset(lines, lrcLines, ends, words);
 
-    if (aligned.matches >= threshold) {
+    if (aligned.matches >= threshold(sung.length)) {
       return {
-        lines: fillTimings(lines, aligned.map, duration, ends),
+        lines: fillTimings(lines, aligned.map, duration, ends, words),
         quality: "aligned",
       };
     }
   }
 
   return { lines: fillTimings(lines, new Map(), duration), quality: "estimate" };
+}
+
+/** Порог «достаточно совпадений» для выравнивания по смещению. */
+function threshold(sungCount: number): number {
+  return Math.max(2, Math.round(sungCount * 0.15));
 }
 
 /** Только строки — для обратной совместимости. */
@@ -781,6 +903,58 @@ export function splitKaraokeWords(text: string): KaraokeWord[] {
   }
 
   return result;
+}
+
+/**
+ * Подставляет в разбивку строки настоящие границы слов.
+ *
+ * `timedWords` — точные тайминги слов совпавшей строки источника
+ * (`wordSyncedLyrics`). Слова сопоставляются по тексту, доля каждого —
+ * его доля от общего времени строки. Слова без тайминга деляят остаток
+ * поровну, чтобы заливка не «спотыкалась».
+ */
+export function withExactWordTimes(
+  words: KaraokeWord[],
+  timedWords: LrcWord[]
+): KaraokeWord[] {
+  if (timedWords.length === 0) return words;
+
+  const known = new Map<string, LrcWord[]>();
+  for (const timed of timedWords) {
+    const key = timed.text.trim().toLowerCase();
+    if (!key) continue;
+    const list = known.get(key) ?? [];
+    list.push(timed);
+    known.set(key, list);
+  }
+
+  // Всего два прохода: сначала разбираем очередь известных слов, затем
+  // назначаем время тем, у кого таймингов нет.
+  const pool = new Map(known.entries());
+  const first = timedWords[0];
+  const last = timedWords[timedWords.length - 1];
+  const span = Math.max(0.001, (last.end || last.start) - first.start);
+  const withTime: { word: KaraokeWord; start: number; end: number }[] = [];
+
+  for (const word of words) {
+    if (word.space) continue;
+    const key = word.text.trim().toLowerCase();
+    const queue = pool.get(key);
+    if (!queue || queue.length === 0) continue;
+    pool.set(key, (queue as LrcWord[]).slice(1));
+    const timed = queue[0];
+    withTime.push({ word, start: timed.start, end: timed.end || timed.start + 0.2 });
+  }
+
+  if (withTime.length === 0) return words;
+
+  return words.map((word) => {
+    const hit = withTime.find((item) => item.word === word);
+    if (!hit) return word;
+    const from = Math.max(0, (hit.start - first.start) / span);
+    const to = Math.max(from, Math.min(1, (hit.end - first.start) / span));
+    return { ...word, from, to };
+  });
 }
 
 /**

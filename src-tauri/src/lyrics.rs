@@ -26,8 +26,26 @@ const LRCLIB_UA: &str = "SoundWave/0.1 (https://github.com/c4elovek-cmd/SoundWav
 const LRCLIB_TIMEOUT: Duration = Duration::from_secs(10);
 const KARALYR_API: &str = "https://karalyr.com/api/get";
 const KARALYR_TIMEOUT: Duration = Duration::from_secs(10);
-const LRCLIB_CACHE_TTL: Duration = Duration::from_secs(6 * 60 * 60);
 const LRCLIB_CACHE_LIMIT: usize = 200;
+
+/// Бюджет поиска караоке — по образцу NeDotify (`LyricsLookup.BUDGET`):
+/// вся цепочка запросов обязана уложиться в 8 секунд и `SYNCED_REQUEST_CAP`
+/// сетевых запросов, чтобы панель не висела в «загрузке».
+const SYNCED_BUDGET: Duration = Duration::from_secs(8);
+const SYNCED_REQUEST_CAP: usize = 51;
+
+/// TTL кэша таймингов — как `_ttl` в NeDotify: найденные тайминги (в том
+/// числе слово-тайминговые) живут 30 дней, «не найдено» — сутки, чтобы
+/// будущие пополнения источников сами становились видны.
+const SYNC_CACHE_TTL: Duration = Duration::from_secs(30 * 24 * 60 * 60);
+const SYNC_MISS_TTL: Duration = Duration::from_secs(24 * 60 * 60);
+
+/// Unison — открытый API слово-тайминговых текстов (TTML/LRC).
+const UNISON_API: &str = "https://unison.boidu.dev/lyrics";
+const UNISON_TIMEOUT: Duration = Duration::from_secs(6);
+/// Минимальная числовая уверенность Unison при поиске без video id.
+const UNISON_MIN_CONFIDENCE: f64 = 0.8;
+
 
 /// Признаки перевода на Genius: такие результаты не берём, если артист другой.
 const GENIUS_TRANSLATION_MARKERS: [&str; 6] = [
@@ -72,6 +90,10 @@ pub struct SyncedLyrics {
     pub found: bool,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub synced_lyrics: Option<String>,
+    /// Караоке с точными слово-таймингами (TTML/QRC/YRC/RichSync),
+    /// нормализованное в единый JSON `{syncType, lines}` — по образцу NeDotify.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub word_synced_lyrics: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub title: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -80,6 +102,9 @@ pub struct SyncedLyrics {
     pub duration: Option<f64>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub error: Option<String>,
+    /// Откуда взяты тайминги: lrclib, karalyr, lrcmux, unison, betterlyrics.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub source: Option<String>,
 }
 
 type Cache = Mutex<HashMap<String, (Value, Instant)>>;
@@ -2232,6 +2257,15 @@ pub async fn get_synced_lyrics(title: &str, artist: &str, duration_ms: f64) -> S
     if is_tempo_modified(title) {
         return SyncedLyrics::default();
     }
+
+    // Бюджет поиска — как в NeDotify (`LyricsLookup.BUDGET`): вся цепочка
+    // запросов обязана уложиться в 8 секунд и 51 запрос, иначе панель
+    // караоке слишком долго висит в «загрузке».
+    let deadline = Instant::now() + SYNCED_BUDGET;
+    let mut requests: usize = 0;
+    let mut best: Option<(f32, Value)> = None;
+    let mut best_source: Option<&'static str> = None;
+
     let cache_key = format!(
         "{}|{}|{}",
         title.to_lowercase(),
@@ -2239,11 +2273,14 @@ pub async fn get_synced_lyrics(title: &str, artist: &str, duration_ms: f64) -> S
         (duration_ms / 1000.0).round() as i64
     );
 
-    if let Some(cached) = cache_get(&SYNC_CACHE, &cache_key, LRCLIB_CACHE_TTL) {
+    if let Some(cached) = cache_get(&SYNC_CACHE, &cache_key, SYNC_CACHE_TTL) {
         return serde_json::from_value(cached).unwrap_or_default();
     }
-
-    let mut best: Option<(f32, Value)> = None;
+    // Промах живёт сутки (как `LyricsLookup._ttl`): позже тайминги могут
+    // появиться в LRCLIB или rich-источниках — тогда их увидят сразу.
+    if let Some(cached) = cache_get(&SYNC_CACHE, &format!("miss|{cache_key}"), SYNC_MISS_TTL) {
+        return serde_json::from_value(cached).unwrap_or_default();
+    }
 
     // Точная запись по «артист + название + длительность»: для караоке это
     // самый надёжный путь, ведь тайминги должны совпасть со звуком.
@@ -2264,6 +2301,7 @@ pub async fn get_synced_lyrics(title: &str, artist: &str, duration_ms: f64) -> S
                 let score = score_lrc_track(&entry, &exact_title, artist, duration_ms);
                 if score >= 6.0 {
                     best = Some((score, entry));
+                    best_source = Some("lrclib");
                 }
             }
         }
@@ -2289,10 +2327,14 @@ pub async fn get_synced_lyrics(title: &str, artist: &str, duration_ms: f64) -> S
     artists.push(String::new());
     artists.truncate(3);
 
+    // --- Каскад LRCLIB с контролем дедлайна и счётчиком запросов ---
     'outer: for t in &titles {
         for a in &artists {
             // Источник на паузе после 429 — не тратим на него запросы.
             if source_is_cooling("lrclib") {
+                break 'outer;
+            }
+            if Instant::now() >= deadline || requests > SYNCED_REQUEST_CAP {
                 break 'outer;
             }
             let url = if a.is_empty() {
@@ -2315,6 +2357,7 @@ pub async fn get_synced_lyrics(title: &str, artist: &str, duration_ms: f64) -> S
             else {
                 continue;
             };
+            requests += 1;
 
             if response.status() == reqwest::StatusCode::TOO_MANY_REQUESTS {
                 cool_down_source("lrclib", response.headers());
@@ -2365,6 +2408,7 @@ pub async fn get_synced_lyrics(title: &str, artist: &str, duration_ms: f64) -> S
                 let score = score_lrc_track(entry, title, artist, duration_ms);
                 if is_better_lrc(score, entry, &best, duration_ms) {
                     best = Some((score, entry.clone()));
+                    best_source = Some("lrclib");
                 }
             }
 
@@ -2408,6 +2452,13 @@ pub async fn get_synced_lyrics(title: &str, artist: &str, duration_ms: f64) -> S
                     else {
                         continue;
                     };
+                    requests += 1;
+
+                    // Бюджет исчерпан — дальше запросы только тянут время.
+                    if Instant::now() >= deadline || requests > SYNCED_REQUEST_CAP {
+                        break 'spell;
+                    }
+
                     if response.status() == reqwest::StatusCode::TOO_MANY_REQUESTS {
                         cool_down_source("lrclib", response.headers());
                         break 'spell;
@@ -2449,6 +2500,7 @@ pub async fn get_synced_lyrics(title: &str, artist: &str, duration_ms: f64) -> S
                             .max(score_lrc_track(entry, variant, artist, duration_ms));
                         if is_better_lrc(score, entry, &best, duration_ms) {
                             best = Some((score, entry.clone()));
+                            best_source = Some("lrclib");
                         }
                     }
 
@@ -2493,6 +2545,7 @@ pub async fn get_synced_lyrics(title: &str, artist: &str, duration_ms: f64) -> S
                                 && lrc_artist_matches(&entry, title, artist)
                             {
                                 best = Some((8.0, entry));
+                                best_source = Some("karalyr");
                             }
                         }
                     }
@@ -2528,38 +2581,228 @@ pub async fn get_synced_lyrics(title: &str, artist: &str, duration_ms: f64) -> S
                             "duration": (duration_ms / 1000.0)
                         });
                         best = Some((8.0, entry));
+                        best_source = Some("lrcmux");
                     }
                 }
             }
         }
     }
 
-    let result = match best {
-        Some((score, entry)) if score >= 6.0 => SyncedLyrics {
-            found: true,
-            synced_lyrics: entry
+    let mut result = match best {
+        Some((score, entry)) if score >= 6.0 => {
+            let synced = entry
                 .get("syncedLyrics")
                 .and_then(|v| v.as_str())
-                .map(String::from),
-            title: entry
-                .get("trackName")
-                .and_then(|v| v.as_str())
-                .map(String::from),
-            artist: entry
-                .get("artistName")
-                .and_then(|v| v.as_str())
-                .map(String::from),
-            duration: entry.get("duration").and_then(|v| v.as_f64()),
-            error: None,
-        },
+                .map(String::from);
+            SyncedLyrics {
+                found: true,
+                title: entry
+                    .get("trackName")
+                    .and_then(|v| v.as_str())
+                    .map(String::from),
+                artist: entry
+                    .get("artistName")
+                    .and_then(|v| v.as_str())
+                    .map(String::from),
+                duration: entry.get("duration").and_then(|v| v.as_f64()),
+                error: None,
+                source: best_source.map(|s| s.to_string()),
+                // Караоке слово-таймингов достаём прямо из строки: если в
+                // ней есть пословные метки Enhanced LRC (`<mm:ss.xx>`) —
+                // нормализуем и отдаём модель с точными границами слов.
+                word_synced_lyrics: synced.as_deref().and_then(|body| {
+                    crate::lyrics_formats::parse(body, duration_ms)
+                        .ok()
+                        .filter(|model| model.sync_type != "line")
+                        .map(|model| crate::lyrics_formats::to_json(&model))
+                }),
+                synced_lyrics: synced,
+            }
+        }
         _ => SyncedLyrics::default(),
     };
 
+    if !result.found {
+        if let Some(rich) = rich_providers_lookup(title, artist, duration_ms, deadline, &mut requests).await {
+            result = rich;
+        }
+    }
+
+    // Раздельный TTL: попадание — 30 дней, промах — сутки, чтобы позже
+    // появившиеся тайминги не ждали месяц.
+    let key = if result.found {
+        cache_key.clone()
+    } else {
+        format!("miss|{cache_key}")
+    };
     if let Ok(value) = serde_json::to_value(&result) {
-        cache_set(&SYNC_CACHE, cache_key, value, LRCLIB_CACHE_LIMIT);
+        cache_set(&SYNC_CACHE, key, value, LRCLIB_CACHE_LIMIT);
     }
 
     result
+}
+
+/// Rich-провайдеры слово-таймингов — порт `RichLyricsProviders` из NeDotify.
+///
+/// Каждый источник делает максимум один запрос внутри общего дедлайна и
+/// лимита запросов. Ответ валидируется так же, как LRCLIB: совпадение
+/// названия, артиста и длительности, разбор нормализатором форматов.
+async fn rich_providers_lookup(
+    title: &str,
+    artist: &str,
+    duration_ms: f64,
+    deadline: Instant,
+    requests: &mut usize,
+) -> Option<SyncedLyrics> {
+    // Unison: точный поиск по «артист + название», формат ttml/lrc/plain.
+    if Instant::now() < deadline && *requests < SYNCED_REQUEST_CAP {
+        if let Some(result) = unison_lookup(title, artist, duration_ms, deadline, requests).await {
+            return Some(result);
+        }
+    }
+    // Better Lyrics и SimpMusic из NeDotify сюда не включены: первому нужен
+    // альбом, которого у треков SoundCloud нет, второй — только по video id
+    // YouTube. Добавим, когда во фронте появятся эти метаданные.
+    None
+}
+
+/// Запрос к Unison с проверкой confidence и идентичности — порт
+/// `_unison_lookup` из NeDotify (без video id: SoundCloud-треков его нет).
+async fn unison_lookup(
+    title: &str,
+    artist: &str,
+    duration_ms: f64,
+    deadline: Instant,
+    requests: &mut usize,
+) -> Option<SyncedLyrics> {
+    if title.trim().is_empty() || artist.trim().is_empty() {
+        return None;
+    }
+
+    let mut url = format!(
+        "{}?song={}&artist={}",
+        UNISON_API,
+        encode_uri_component(title),
+        encode_uri_component(artist)
+    );
+    if duration_ms > 0.0 {
+        url.push_str(&format!("&duration={}", (duration_ms / 1000.0).round() as i64));
+    }
+
+    *requests += 1;
+    let remaining = deadline.saturating_duration_since(Instant::now());
+    if remaining.is_zero() {
+        return None;
+    }
+    let timeout = UNISON_TIMEOUT.min(remaining);
+    let Ok(response) = HTTP
+        .get(&url)
+        .header("User-Agent", LRCLIB_UA)
+        .header("Accept", "application/json")
+        .timeout(timeout)
+        .send()
+        .await
+    else {
+        return None;
+    };
+    if response.status() == reqwest::StatusCode::TOO_MANY_REQUESTS {
+        cool_down_source("unison", response.headers());
+        return None;
+    }
+    if !response.status().is_success() {
+        return None;
+    }
+    let Ok(body) = response.json::<Value>().await else {
+        return None;
+    };
+
+    if body.get("success").and_then(|v| v.as_bool()) != Some(true) {
+        return None;
+    }
+    let Some(data) = body.get("data") else {
+        return None;
+    };
+
+    // Поиск без video id: запись обязана представиться сама.
+    let offered_title = data.get("song").and_then(|v| v.as_str()).unwrap_or("");
+    let offered_artist = data.get("artist").and_then(|v| v.as_str()).unwrap_or("");
+    if offered_title.is_empty() || offered_artist.is_empty() {
+        return None;
+    }
+
+    // Уверенность: числовая 0..1 или уровневая строка. Без video id принимаем
+    // только 0.8+ или «high» — как `_UNISON_MIN_CONFIDENCE` в NeDotify.
+    match data.get("confidence") {
+        Some(Value::Number(number)) => {
+            let Ok(confidence) = number.as_f64().ok_or(()) else {
+                return None;
+            };
+            if !(0.0..=1.0).contains(&confidence) || confidence < UNISON_MIN_CONFIDENCE {
+                return None;
+            }
+        }
+        Some(Value::String(level)) => {
+            if level.trim().to_lowercase() != "high" {
+                return None;
+            }
+        }
+        _ => return None,
+    }
+
+    let offered_duration = data
+        .get("duration")
+        .and_then(|v| v.as_f64())
+        .filter(|v| v.is_finite() && *v > 0.0)
+        .unwrap_or(duration_ms / 1000.0);
+
+    // Идентичность: те же проверки названия/артиста, что и для LRCLIB.
+    let entry = serde_json::json!({
+        "trackName": offered_title,
+        "artistName": offered_artist,
+        "duration": offered_duration,
+        "syncedLyrics": data.get("lyrics").and_then(|v| v.as_str()).unwrap_or(""),
+    });
+    if !lrc_title_matches(&entry, title)
+        || !lrc_artist_matches(&entry, title, artist)
+        || (duration_ms > 0.0
+            && (offered_duration * 1000.0 - duration_ms).abs() > 15_000.0)
+    {
+        return None;
+    }
+
+    let format = data
+        .get("format")
+        .and_then(|v| v.as_str())
+        .unwrap_or("")
+        .to_lowercase();
+    let Some(text) = data.get("lyrics").and_then(|v| v.as_str()) else {
+        return None;
+    };
+    if text.trim().chars().count() <= 20 {
+        return None;
+    }
+
+    let parsed = match format.as_str() {
+        "ttml" => crate::lyrics_formats::parse_ttml(text),
+        "lrc" => crate::lyrics_formats::parse_lrc(text, duration_ms),
+        _ => return None,
+    };
+    let model = parsed.ok()?;
+    if model.sync_type == "line" {
+        // Обычный LRC и так умеем — смысла в Unison нет.
+        return None;
+    }
+
+    Some(SyncedLyrics {
+        found: true,
+        synced_lyrics: Some(crate::lyrics_formats::to_lrc(&model)),
+        word_synced_lyrics: Some(crate::lyrics_formats::to_json(&model)),
+        title: Some(offered_title.to_string()),
+        artist: Some(offered_artist.to_string()),
+        duration: Some(offered_duration),
+        error: None,
+        source: Some("unison".to_string()),
+    })
 }
 
 /// Кодирование строки для URL-параметра.

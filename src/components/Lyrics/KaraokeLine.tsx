@@ -1,5 +1,10 @@
 import { memo, useMemo } from "react";
-import { splitKaraokeIntoSyllables, splitKaraokeWords } from "../../lib/lyrics";
+import {
+  LrcWord,
+  splitKaraokeIntoSyllables,
+  splitKaraokeWords,
+  withExactWordTimes,
+} from "../../lib/lyrics";
 
 interface KaraokeLineProps {
   text: string;
@@ -7,6 +12,12 @@ interface KaraokeLineProps {
   section?: boolean;
   /** По слогам слово рисуется как набор слогов со своими отрезками времени. */
   syllableMode?: boolean;
+  /**
+   * Точные пословные тайминги строки (секунды) — из нормализованной
+   * модели бэкенда. Когда есть, доли заливки считаются из настоящих
+   * границ слов, а не из оценки по длине.
+   */
+  timedWords?: LrcWord[];
 }
 
 /**
@@ -22,11 +33,19 @@ interface KaraokeLineProps {
  * компонент 60 раз в секунду), а напрямую в DOM из цикла анимации —
  * функцией {@link paintKaraokeWords}.
  */
-function KaraokeLineBase({ text, section, syllableMode }: KaraokeLineProps) {
+function KaraokeLineBase({
+  text,
+  section,
+  syllableMode,
+  timedWords,
+}: KaraokeLineProps) {
   const words = useMemo(() => {
     const split = splitKaraokeWords(text);
+    if (timedWords && timedWords.length > 0) {
+      return withExactWordTimes(split, timedWords);
+    }
     return syllableMode ? splitKaraokeIntoSyllables(split) : split;
-  }, [text, syllableMode]);
+  }, [text, syllableMode, timedWords]);
 
   if (section) {
     return <>{text}</>;

@@ -17,10 +17,14 @@ export interface LyricsResult {
 export interface SyncedLyricsResult {
   found: boolean;
   syncedLyrics?: string;
+  /** Караоке с точными слово-таймингами: JSON `{syncType, lines}` от бэкенда. */
+  wordSyncedLyrics?: string;
   title?: string;
   artist?: string;
   duration?: number;
   error?: string;
+  /** Откуда взяты тайминги: lrclib, karalyr, lrcmux, unison. */
+  source?: string;
 }
 
 interface CacheEntry extends LyricsResult {
@@ -28,6 +32,17 @@ interface CacheEntry extends LyricsResult {
 }
 
 type LyricsCache = Record<string, CacheEntry>;
+
+/**
+ * TTL записи кэша — как в NeDotify (`LyricsLookup._ttl`).
+ *
+ * Найденные тайминги живут 30 дней: точные тайминги не устаревают. Промах
+ * и текст без таймингов — сутки: когда позже появится слово-тайминговое
+ * караоке, обычный текст сам обновится и караоке включится.
+ */
+function cacheTtl(entry: CacheEntry): number {
+  return entry.found && (entry.lyrics || entry.url) ? 30 * 24 * 60 * 60 * 1000 : 24 * 60 * 60 * 1000;
+}
 
 interface LyricsState {
   loading: boolean;
@@ -44,7 +59,6 @@ interface LyricsState {
 }
 
 const CACHE_KEY = "sw-lyrics-cache-v4";
-const CACHE_TTL = 30 * 24 * 60 * 60 * 1000;
 const CACHE_LIMIT = 100;
 
 function readCache(): LyricsCache {
@@ -69,7 +83,7 @@ function readCache(): LyricsCache {
 }
 
 function isFresh(entry: CacheEntry): boolean {
-  return Date.now() - entry.savedAt < CACHE_TTL;
+  return Date.now() - entry.savedAt < cacheTtl(entry);
 }
 
 function saveCache(cache: LyricsCache) {

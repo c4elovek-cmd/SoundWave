@@ -62,10 +62,14 @@ declare global {
       ) => Promise<{
         found: boolean;
         syncedLyrics?: string;
+        /** Караоке с точными слово-таймингами: JSON `{syncType, lines}`. */
+        wordSyncedLyrics?: string;
         title?: string;
         artist?: string;
         duration?: number;
         error?: string;
+        /** Откуда взяты тайминги: lrclib, karalyr, lrcmux, unison. */
+        source?: string;
       }>;
       onAgentRequest: (
         callback: (request: { id: string; type: string; payload?: unknown }) => void

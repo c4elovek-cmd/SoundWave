@@ -10,6 +10,7 @@ pub mod corners;
 pub mod discord;
 pub mod fonts;
 pub mod lyrics;
+pub mod lyrics_formats;
 pub mod session;
 pub mod soundcloud;
 pub mod sync;
